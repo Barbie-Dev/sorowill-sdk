@@ -43,9 +43,23 @@ export function buildSep7TxUri(transactionXdr: string, options: BuildSep7TxUriOp
     throw new Error('SEP-7 callback URL is required');
   }
 
+  // Validate the callback URL scheme (issue #486).
+  //
+  // SEP-7 callback URLs are transmitted over the network inside the deeplink
+  // URI.  Allowing plain http:// would expose transaction data and the signing
+  // redirect to passive network observers.  Only https:// and recognised
+  // mobile deeplink schemes (anything that is not an http URL) are accepted.
+  const trimmedCallback = options.callbackUrl.trim();
+  const callbackLower = trimmedCallback.toLowerCase();
+  if (callbackLower.startsWith('http://')) {
+    throw new Error(
+      'SEP-7 callback URL must use https:// or a recognised deeplink scheme; plain http:// is not allowed because it transmits transaction data unencrypted',
+    );
+  }
+
   const params = new URLSearchParams({
     xdr: transactionXdr,
-    callback: options.callbackUrl,
+    callback: trimmedCallback,
   });
 
   if (options.message) {
