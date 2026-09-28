@@ -286,4 +286,23 @@ export class RpcEndpointPool {
     }
     return rpcUrl;
   }
+
+  /**
+   * Returns the RPC server bound to the pool's *current* active endpoint.
+   *
+   * Callers that cache a server reference (e.g. `getNetworkFeeStats` on a
+   * fresh client instance) would otherwise keep talking to whichever
+   * endpoint was active when the reference was captured, detaching from the
+   * client's current network context after a network switch or failover.
+   * Resolving the server lazily through this accessor keeps fee queries
+   * pinned to the live network context.
+   */
+  getActiveServer(): SoroWillRpcServer {
+    this.maybeRepromotePrimaryEndpoint();
+    const server = this.servers[this.activeIndex];
+    if (!server) {
+      throw new Error('No active RPC server is configured');
+    }
+    return server;
+  }
 }

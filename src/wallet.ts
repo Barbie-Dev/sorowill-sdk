@@ -205,6 +205,72 @@ export interface WalletAdapter {
   ): Promise<string | SignatureResponse>;
   /** Reports the network this wallet is currently set to, without prompting the user. Optional — not every wallet adapter can report this. */
   getNetwork?(): Promise<{ network: string; networkPassphrase: string }>;
+  /**
+   * Returns the current session token for this wallet, if the adapter issues
+   * one. Optional — adapters that do not use session tokens may omit it.
+   */
+  getSession?(): Promise<WalletSession | undefined>;
+  /**
+   * Refreshes an expired/invalid session token and returns the new one.
+   * Optional — only meaningful for adapters that issue session tokens.
+   */
+  refreshSession?(): Promise<WalletSession>;
+}
+
+/**
+ * Validates a wallet session token before it is sent to the contract,
+ * refreshing it when it is missing or expired.
+ *
+ * Returns the token to use, or `undefined` when the adapter does not use
+ * session tokens. Throws a {@link WalletSessionError} with an actionable
+ * message when the token is expired and cannot be refreshed, so callers get a
+ * clear failure instead of the contract silently rejecting a stale token.
+ */
+export async function ensureValidSession(
+  wallet: WalletAdapter,
+  now: number = Date.now(),
+): Promise<string | undefined> {
+  if (!wallet.getSession) {
+    return undefined;
+  }
+
+  let session: WalletSession | undefined;
+  try {
+    session = await wallet.getSession();
+  } catch (err) {
+    throw new WalletSessionError(
+      'Failed to read the wallet session token. Reconnect the wallet and try again.',
+      err,
+    );
+  }
+
+  if (session && session.token && session.expiresAt > now) {
+    return session.token;
+  }
+
+  if (!wallet.refreshSession) {
+    throw new WalletSessionError(
+      'The wallet session token has expired and this adapter cannot refresh it. Reconnect the wallet and try again.',
+    );
+  }
+
+  let refreshed: WalletSession;
+  try {
+    refreshed = await wallet.refreshSession();
+  } catch (err) {
+    throw new WalletSessionError(
+      'The wallet session token expired and could not be refreshed. Reconnect the wallet and try again.',
+      err,
+    );
+  }
+
+  if (!refreshed || !refreshed.token || refreshed.expiresAt <= now) {
+    throw new WalletSessionError(
+      'The wallet session token is still invalid after refreshing. Reconnect the wallet and try again.',
+    );
+  }
+
+  return refreshed.token;
 }
 
 /**
@@ -303,6 +369,7 @@ export class FreighterWalletAdapter implements WalletAdapter {
   }
 
   async disconnect(): Promise<void> {
+    this.session = undefined;
     return;
   }
 
@@ -331,10 +398,33 @@ export class FreighterWalletAdapter implements WalletAdapter {
     return address;
   }
 
+  /** Returns the current session token, if one has been established. */
+  async getSession(): Promise<WalletSession | undefined> {
+    return this.session;
+  }
+
+  /**
+   * Refreshes the session token by re-reading the connected account from
+   * Freighter and issuing a fresh token with a new expiry.
+   */
+  async refreshSession(): Promise<WalletSession> {
+    const publicKey = await this.getPublicKey();
+    this.session = {
+      token: publicKey,
+      expiresAt: Date.now() + DEFAULT_SESSION_TTL_MS,
+    };
+    return this.session;
+  }
+
   async signTransaction(
     transactionXdr: string,
     opts: { networkPassphrase: string; timeoutMs?: number },
   ): Promise<string> {
+    // Validate/refresh the session token before handing anything to the
+    // contract, so an expired token surfaces a clear error here instead of
+    // being rejected opaquely on-chain.
+    await ensureValidSession(this);
+
     const timeoutMs = opts.timeoutMs ?? DEFAULT_SIGN_TIMEOUT_MS;
     // Kicked off synchronously (not awaited yet) so the timeout below is
     // still registered before this function's first `await`, regardless of

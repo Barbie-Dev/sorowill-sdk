@@ -73,6 +73,16 @@ function normalizeSep7Params(input: string | URL | URLSearchParams): URLSearchPa
   return new URLSearchParams(trimmed.replace(/^[?#]/, ''));
 }
 
+/**
+ * SEP-7 requires parameter values to be percent-encoded so that reserved
+ * characters (?, &, =, #, spaces, etc.) inside values such as callback URLs
+ * do not break URI parsing. URLSearchParams encodes spaces as `+`, which is
+ * not valid in a URI query string, so we additionally normalize `+` to `%20`.
+ */
+function encodeSep7Params(params: URLSearchParams): string {
+  return params.toString().replace(/\+/g, '%20');
+}
+
 export function buildSep7TxUri(transactionXdr: string, options: BuildSep7TxUriOptions): string {
   if (transactionXdr.trim().length === 0) {
     throw new Error('SEP-7 transaction XDR is required');
@@ -113,7 +123,7 @@ export function buildSep7TxUri(transactionXdr: string, options: BuildSep7TxUriOp
     params.set('origin_domain', options.originDomain);
   }
 
-  return `web+stellar:tx?${params.toString()}`;
+  return `web+stellar:tx?${encodeSep7Params(params)}`;
 }
 
 export function parseSep7Callback(
