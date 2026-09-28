@@ -252,6 +252,32 @@ The DebugLogger is designed with a **no-secrets-logged guarantee**: it never log
 
 This makes it safe to forward debug logs to your own internal logging pipeline (e.g., a logging service, analytics tool, or error tracker) without worrying about leaking credentials.
 
+### Stack traces and error reports
+
+When `debug: true`, `error` log entries include the error's `stack` so you can pinpoint where a failure occurred. Stacks are omitted when debug logging is off.
+
+To collect details for a support request, use `client.reportError(err)`. It returns a JSON-serializable object with the error's name, message, code, stack, cause, contract ID, and network passphrase:
+
+```ts
+try {
+  await client.checkIn(willId);
+} catch (err) {
+  console.error(JSON.stringify(client.reportError(err), null, 2));
+}
+```
+
+## Fees and Soroban resource costs
+
+`getNetworkFeeStats()` only reports network *inclusion* fees. Soroban calls also pay a resource fee (CPU, memory, ledger I/O, storage rent) that varies per operation — a `merge_wills` with many beneficiaries costs much more than a `check_in`. Use `previewFee(method, args)` to simulate the real cost; it returns `{ resourceFee, totalFee }`. All state-changing SDK calls simulate via `prepareTransaction` before submitting, so the submitted fee always includes the simulated resource fee. See Stellar's [fees, resource limits, and metering](https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering) docs.
+
+## Pagination order
+
+`getWillsByOwner` and `getWillsByBeneficiary` always return wills sorted ascending by `will_id` (the SDK sorts client-side because the contract does not guarantee order), so pagination cursors are stable across calls.
+
+## Public vs internal types
+
+Only symbols exported from the package entry point are part of the stable API. Internal types such as Soroban's `xdr.ScVal` are not re-exported; import them from `@stellar/stellar-sdk` if needed.
+
 ## Typed errors
 
 Contract failures are exposed as subclasses of `WillContractError`, including

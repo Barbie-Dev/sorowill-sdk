@@ -71,6 +71,7 @@ import type { BeforeInvokeContext, AfterInvokeContext } from './hooks';
 import { assertPreparedTransactionMatchesIntendedOperation } from './txValidation';
 import { DebugLogger } from './debugLogger';
 
+/** @internal Local alias for Soroban's `xdr.ScVal`; not part of the public API. */
 type ScVal = xdr.ScVal;
 
 const { Spec } = stellarContract;
@@ -140,6 +141,7 @@ export interface SoroWillRpcServer {
   getHealth?(): Promise<rpc.Api.GetHealthResponse>;
 }
 
+/** @internal */
 interface ContractSpecLike {
   funcArgsToScVals(method: string, args: Record<string, unknown>): ScVal[];
   funcResToNative(method: string, value: ScVal): unknown;
@@ -419,7 +421,21 @@ function mapWillList(raw: unknown): Will[] {
         'This usually means the deployed contract spec and this SDK version have drifted apart.',
     );
   }
-  return raw.map(mapWill);
+  return sortWillsById(raw.map(mapWill));
+}
+
+/**
+ * Sorts wills ascending by numeric `will_id`. The contract does not guarantee
+ * list order, so the SDK enforces it client-side: pagination cursors are
+ * indexes into this sorted list, which keeps pages stable across calls
+ * (no duplicates or skips as long as the underlying set is unchanged).
+ */
+function sortWillsById(wills: Will[]): Will[] {
+  return wills.sort((a, b) => {
+    const x = BigInt(a.id);
+    const y = BigInt(b.id);
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
 }
 
 // === Beneficiary scale conversion
@@ -1196,6 +1212,9 @@ export class SoroWillClient {
    * wills. Returns the plain list unchanged when neither `pageSize` nor
    * `cursor` is present on `options`, so callers who don't ask for
    * pagination keep getting a plain `Will[]`.
+   *
+   * Sort order guarantee: wills are always returned sorted ascending by
+   * `will_id`, so cursors are consistent across calls.
    */
   private paginate(
     wills: Will[],
@@ -1401,12 +1420,18 @@ export class SoroWillClient {
    * Simulates `method` with `args` and returns the Soroban resource fee the
    * network would charge, without signing or submitting anything. Useful for
    * showing a fee estimate in a UI before the user commits to a transaction.
+   *
+   * `resourceFee` is the operation-specific Soroban resource cost (CPU, RAM,
+   * ledger I/O, storage). `totalFee` adds the base inclusion fee, giving the
+   * minimum total fee the network will accept for this call.
+   *
+   * @see https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering
    */
   async previewFee(
     method: string,
     args: Record<string, unknown>,
     options?: RequestOptions,
-  ): Promise<{ resourceFee: string }> {
+  ): Promise<{ resourceFee: string; totalFee: string }> {
     try {
       const spec = await this.getSpec(options);
       const scArgs = spec.funcArgsToScVals(method, args);
@@ -1421,7 +1446,10 @@ export class SoroWillClient {
       if (rpc.Api.isSimulationError(simulation)) {
         throw new SimulationError(method, simulation.error);
       }
-      return { resourceFee: simulation.minResourceFee };
+      return {
+        resourceFee: simulation.minResourceFee,
+        totalFee: (BigInt(BASE_FEE) + BigInt(simulation.minResourceFee)).toString(),
+      };
     } catch (error) {
       throw mapContractError(error);
     }
@@ -2160,6 +2188,27 @@ export class SoroWillClient {
     };
   }
 
+  /**
+   * Builds a JSON-serializable error report (name, message, code, stack,
+   * cause, SDK context) that users can attach to a support request.
+   * Stack traces are always included here since the caller explicitly asks
+   * for the report; routine logging only includes stacks when `debug` is on.
+   */
+  reportError(error: unknown): Record<string, unknown> {
+    const err = error instanceof Error ? error : new Error(String(error));
+    const cause = (err as { cause?: unknown }).cause;
+    return {
+      timestamp: new Date().toISOString(),
+      name: err.name,
+      message: err.message,
+      code: (err as { code?: unknown }).code,
+      stack: err.stack,
+      cause: cause instanceof Error ? { name: cause.name, message: cause.message, stack: cause.stack } : cause,
+      contractId: this.contract.contractId(),
+      networkPassphrase: this.networkPassphrase,
+    };
+  }
+
   async refreshSpec(options?: RequestOptions): Promise<InstanceType<typeof Spec>> {
     this.specPromise = undefined;
     return this.getSpec(options);
@@ -2167,6 +2216,17 @@ export class SoroWillClient {
 
   /**
    * Returns network-wide inclusion-fee statistics (`rpc.Api.GetFeeStatsResponse`).
+   *
+   * **Note:** these stats cover only the *inclusion* fee. Soroban invocations
+   * also pay a resource fee (CPU instructions, memory, ledger reads/writes,
+   * storage rent) that depends on the specific operation — e.g. `merge_wills`
+   * with many beneficiaries costs far more than `check_in`. Do not size a
+   * transaction fee from these stats alone; use {@link previewFee} to simulate
+   * the actual cost. State-changing SDK calls always simulate via
+   * `prepareTransaction` before submission, so the submitted fee already
+   * includes the simulated resource fee.
+   *
+   * @see https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering
    *
    * @throws {SoroWillError} If the configured RPC server does not support `getFeeStats`.
    */

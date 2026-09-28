@@ -1,3 +1,12 @@
+/**
+ * Public API surface of @sorowill/sdk.
+ *
+ * Everything exported from this module is part of the stable, semver-covered
+ * API. Internal implementation types (e.g. Soroban's `xdr.ScVal`, the contract
+ * spec adapter, RPC endpoint pool, debug logger) are intentionally NOT
+ * re-exported and may change in any release. Import raw Soroban types from
+ * `@stellar/stellar-sdk` directly if you need them.
+ */
 export { SoroWillClient, parseWillId, SoroWillInvalidIdError } from './SoroWillClient';
 export type {
   EventSubscription,
