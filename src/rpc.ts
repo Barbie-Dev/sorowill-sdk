@@ -70,10 +70,51 @@ export function isRetryableRpcConnectionError(error: unknown): boolean {
  */
 const DEFAULT_FAILOVER_COOLDOWN_MS = 60_000;
 
+/**
+ * Default per-endpoint timeout in milliseconds (issue #485).
+ *
+ * If an endpoint does not respond within this window the pool treats it as a
+ * transient failure, rotates it to the back, and retries the next endpoint.
+ * 30 seconds is a conservative but practical ceiling for a Soroban RPC call.
+ */
+const DEFAULT_ENDPOINT_TIMEOUT_MS = 30_000;
+
+/**
+ * Races `promise` against a timeout.
+ *
+ * If `timeoutMs` is not a positive finite number the original promise is
+ * returned unchanged so existing callers that pass `0` or `Infinity` are
+ * unaffected.
+ */
+function withEndpointTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return promise;
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`RPC endpoint timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 export class RpcEndpointPool {
   private readonly servers: SoroWillRpcServer[];
   private readonly rpcUrls: string[];
   private readonly failoverCooldownMs: number;
+  /** Per-endpoint response timeout in milliseconds (issue #485). */
+  private readonly endpointTimeoutMs: number;
   private activeIndex = 0;
   private lastFailoverAt: number | null = null;
 
@@ -85,11 +126,16 @@ export class RpcEndpointPool {
    * @param failoverCooldownMs - How long to keep using a backup endpoint
    * after a failover before opportunistically retrying the primary
    * (first-listed) endpoint again. Defaults to {@link DEFAULT_FAILOVER_COOLDOWN_MS}.
+   * @param endpointTimeoutMs - Maximum time to wait for a single endpoint
+   * before treating it as unresponsive and rotating to the next one.
+   * Defaults to {@link DEFAULT_ENDPOINT_TIMEOUT_MS}. Pass `0` or `Infinity`
+   * to disable the per-endpoint timeout entirely.
    */
   constructor(
     rpcUrls: readonly string[],
     serverOverride?: SoroWillRpcServer,
     failoverCooldownMs: number = DEFAULT_FAILOVER_COOLDOWN_MS,
+    endpointTimeoutMs: number = DEFAULT_ENDPOINT_TIMEOUT_MS,
   ) {
     const normalizedRpcUrls = rpcUrls
       .map((rpcUrl) => rpcUrl.trim())
@@ -110,6 +156,7 @@ export class RpcEndpointPool {
 
     this.rpcUrls = uniqueRpcUrls;
     this.failoverCooldownMs = failoverCooldownMs;
+    this.endpointTimeoutMs = endpointTimeoutMs;
     this.servers = serverOverride
       ? uniqueRpcUrls.map(() => serverOverride)
       : uniqueRpcUrls.map(
@@ -146,7 +193,10 @@ export class RpcEndpointPool {
       }
 
       try {
-        return await operation(server, rpcUrl);
+        // Enforce a per-endpoint timeout so a hanging primary endpoint does
+        // not block the pool forever — it is rotated to the back of the pool
+        // and the next endpoint is tried instead (issue #485).
+        return await withEndpointTimeout(operation(server, rpcUrl), this.endpointTimeoutMs);
       } catch (error) {
         lastError = error;
         if (!isRetryableRpcConnectionError(error) || attempt === this.servers.length - 1) {
