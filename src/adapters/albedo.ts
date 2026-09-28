@@ -34,21 +34,33 @@ function toAlbedoNetwork(networkPassphrase: string): string {
   }
 }
 
+/** Options for {@link createAlbedoAdapter}. */
+export interface AlbedoAdapterOptions {
+  /**
+   * The Stellar network passphrase the adapter reports. Defaults to
+   * `Networks.PUBLIC`.
+   */
+  networkPassphrase?: string;
+}
+
 /**
  * Creates a {@link WalletAdapter} backed by Albedo (https://albedo.link), a
  * web-based Stellar signer that requires no browser extension.
  *
  * ```ts
+ * import { Networks } from '@stellar/stellar-sdk';
  * import { SoroWillClient, createAlbedoAdapter } from '@sorowill/sdk';
  *
  * const client = new SoroWillClient({
  *   network: 'testnet',
  *   contractId: 'C...',
- *   wallet: createAlbedoAdapter(),
+ *   wallet: createAlbedoAdapter({ networkPassphrase: Networks.TESTNET }),
  * });
  * ```
  */
-export function createAlbedoAdapter(): WalletAdapter {
+export function createAlbedoAdapter(options: AlbedoAdapterOptions = {}): WalletAdapter {
+  const networkPassphrase = options.networkPassphrase ?? Networks.PUBLIC;
+  const networkInfo = { network: toAlbedoNetwork(networkPassphrase), networkPassphrase };
   let cachedPublicKey: string | undefined;
   let connected = false;
 
@@ -62,22 +74,21 @@ export function createAlbedoAdapter(): WalletAdapter {
       const { pubkey } = await albedo.publicKey({});
       cachedPublicKey = pubkey;
       connected = true;
-      return { publicKey: pubkey, network: 'public', networkPassphrase: Networks.PUBLIC };
+      return { publicKey: pubkey, ...networkInfo };
     },
 
     async reconnect(): Promise<WalletConnection> {
       if (connected && cachedPublicKey) {
         return {
           publicKey: cachedPublicKey,
-          network: 'public',
-          networkPassphrase: Networks.PUBLIC,
+          ...networkInfo,
         };
       }
       const albedo = await loadAlbedo();
       const { pubkey } = await albedo.publicKey({});
       cachedPublicKey = pubkey;
       connected = true;
-      return { publicKey: pubkey, network: 'public', networkPassphrase: Networks.PUBLIC };
+      return { publicKey: pubkey, ...networkInfo };
     },
 
     async disconnect(): Promise<void> {
@@ -110,7 +121,7 @@ export function createAlbedoAdapter(): WalletAdapter {
     },
 
     async getNetwork(): Promise<{ network: string; networkPassphrase: string }> {
-      return { network: 'public', networkPassphrase: Networks.PUBLIC };
+      return { ...networkInfo };
     },
   };
 }

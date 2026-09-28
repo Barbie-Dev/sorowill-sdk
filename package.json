@@ -31,14 +31,17 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run build",
     "smoke-test": "node scripts/smoke-test.mjs",
-    "docs:api": "typedoc"
+    "docs:api": "typedoc",
+    "check:exports": "attw --pack . --profile node16 --ignore-rules cjs-resolves-to-esm,no-resolution"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1"
   },
   "devDependencies": {
     "@albedo-link/intent": "^0.13.0",
+    "@arethetypeswrong/cli": "^0.18.2",
     "@eslint/js": "^9.0.0",
     "@ledgerhq/hw-app-str": "^7.7.6",
     "@stellar/freighter-api": "^6.0.1",

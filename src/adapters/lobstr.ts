@@ -57,7 +57,19 @@ export class LobstrWalletAdapter implements WalletAdapter {
     ]);
   }
 
+  /**
+   * Restores the existing session when the client reports it is still
+   * connected, only starting a new pairing (and URI) when none exists.
+   */
   async reconnect(): Promise<WalletConnection> {
+    const { client } = this.options;
+    if (client.getNetwork && (await client.isConnected())) {
+      const [publicKey, network] = await Promise.all([
+        client.getPublicKey(),
+        client.getNetwork(),
+      ]);
+      return { publicKey, ...network };
+    }
     return this.connect();
   }
 

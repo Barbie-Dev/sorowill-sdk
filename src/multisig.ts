@@ -10,7 +10,11 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 
-import { InvalidSecretKeyError, InvalidTransactionXdrError } from './errors';
+import {
+  InvalidSecretKeyError,
+  InvalidTransactionXdrError,
+  MultisigTimeoutError,
+} from './errors';
 
 /** A single collected signature from one signer. */
 export interface CollectedSignature {
@@ -28,6 +32,11 @@ export interface MultisigCollectorOptions {
   networkPassphrase: string;
   /** The number of signatures required before the transaction can be submitted. */
   threshold: number;
+  /**
+   * Maximum time (in milliseconds) to wait for the signature threshold to be
+   * met before failing fast. When omitted, no timeout is enforced.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -60,6 +69,7 @@ function validateTransactionXdr(transactionXdr: string): void {
  *   transactionXdr: preparedTxXdr,
  *   networkPassphrase: Networks.TESTNET,
  *   threshold: 2,
+ *   timeoutMs: 30_000,
  * });
  *
  * // Distribute collector.transactionXdr to each signer...
@@ -76,16 +86,23 @@ export class MultisigCollector {
   private readonly _transactionXdr: string;
   private readonly _networkPassphrase: string;
   private readonly _threshold: number;
+  private readonly _timeoutMs?: number;
   private readonly _signatures: CollectedSignature[] = [];
+  private _startedAt: number;
 
   constructor(options: MultisigCollectorOptions) {
-    if (options.threshold < 1) {
-      throw new Error('Threshold must be at least 1');
+    if (!Number.isInteger(options.threshold) || options.threshold < 1) {
+      throw new Error('Threshold must be an integer of at least 1');
+    }
+    if (options.timeoutMs !== undefined && options.timeoutMs <= 0) {
+      throw new Error('timeoutMs must be a positive number of milliseconds');
     }
     validateTransactionXdr(options.transactionXdr);
     this._transactionXdr = options.transactionXdr;
     this._networkPassphrase = options.networkPassphrase;
     this._threshold = options.threshold;
+    this._timeoutMs = options.timeoutMs;
+    this._startedAt = Date.now();
   }
 
   /** The base64-encoded XDR of the transaction envelope to be signed. */
@@ -101,6 +118,11 @@ export class MultisigCollector {
   /** The number of signatures required before submission. */
   get threshold(): number {
     return this._threshold;
+  }
+
+  /** The configured coordination timeout in milliseconds, if any. */
+  get timeoutMs(): number | undefined {
+    return this._timeoutMs;
   }
 
   /** All collected signatures so far. */
@@ -119,11 +141,40 @@ export class MultisigCollector {
   }
 
   /**
+   * Whether the coordination timeout has elapsed before the threshold was met.
+   * Always false when no timeout is configured or once {@link isReady} is true.
+   */
+  get isTimedOut(): boolean {
+    if (this._timeoutMs === undefined || this.isReady) {
+      return false;
+    }
+    return Date.now() - this._startedAt >= this._timeoutMs;
+  }
+
+  /**
+   * Throw a {@link MultisigTimeoutError} if the coordination timeout has
+   * elapsed before the signature threshold was met.
+   * @throws {MultisigTimeoutError}
+   */
+  private assertNotTimedOut(): void {
+    if (this.isTimedOut) {
+      throw new MultisigTimeoutError(
+        this._signatures.length,
+        this._threshold,
+        this._timeoutMs as number,
+      );
+    }
+  }
+
+  /**
    * Add a signature from a signer.
+   * @throws {MultisigTimeoutError} if the coordination timeout has elapsed.
    * @throws if the signer has already signed.
    * @throws if signerPublicKey is not a valid Stellar Ed25519 public key.
+   * @throws if signature is empty, not a valid decorated signature, or its hint does not match the signer.
    */
   addSignature(signerPublicKey: string, signature: string): void {
+    this.assertNotTimedOut();
     if (!StrKey.isValidEd25519PublicKey(signerPublicKey)) {
       throw new Error(
         `"${signerPublicKey}" is not a valid Stellar public key. ` +
@@ -133,20 +184,40 @@ export class MultisigCollector {
     if (this._signatures.some((s) => s.signerPublicKey === signerPublicKey)) {
       throw new Error(`Signer ${signerPublicKey} has already signed`);
     }
+    if (!signature) {
+      throw new Error(`Signature for signer ${signerPublicKey} must not be empty`);
+    }
+    let decorated: xdr.DecoratedSignature;
+    try {
+      decorated = xdr.DecoratedSignature.fromXDR(signature, 'base64');
+    } catch {
+      throw new Error(
+        `Signature for signer ${signerPublicKey} is not a valid base64-encoded decorated signature`,
+      );
+    }
+    if (decorated.signature().length !== 64) {
+      throw new Error(`Signature for signer ${signerPublicKey} must be 64 bytes`);
+    }
+    if (!decorated.hint().equals(Keypair.fromPublicKey(signerPublicKey).signatureHint())) {
+      throw new Error(`Signature hint does not match signer ${signerPublicKey}`);
+    }
     this._signatures.push({ signerPublicKey, signature });
   }
 
   /** Remove all collected signatures, allowing the collection to restart. */
   reset(): void {
     this._signatures.length = 0;
+    this._startedAt = Date.now();
   }
 
   /**
    * Build the final signed transaction by combining the envelope with all
    * collected signatures. Only call this when {@link isReady} is true.
+   * @throws {MultisigTimeoutError} if the coordination timeout has elapsed.
    * @throws if the threshold has not been met.
    */
   build(): Transaction {
+    this.assertNotTimedOut();
     if (!this.isReady) {
       throw new Error(
         `Not enough signatures: ${this._signatures.length}/${this._threshold} collected`,
@@ -186,12 +257,14 @@ export class MultisigCollector {
     transactionXdr: string;
     networkPassphrase: string;
     threshold: number;
+    timeoutMs?: number;
     signatures: CollectedSignature[];
   } {
     return {
       transactionXdr: this._transactionXdr,
       networkPassphrase: this._networkPassphrase,
       threshold: this._threshold,
+      timeoutMs: this._timeoutMs,
       signatures: [...this._signatures],
     };
   }
@@ -203,6 +276,7 @@ export class MultisigCollector {
     transactionXdr: string;
     networkPassphrase: string;
     threshold: number;
+    timeoutMs?: number;
     signatures: CollectedSignature[];
   }): MultisigCollector {
     const collector = new MultisigCollector(data);
@@ -250,40 +324,6 @@ export async function buildMultisigTransactionXdr(options: {
   // @ts-expect-error scArgs type mismatch between ContractSpec and stellar-sdk
   const operation = contract.call(options.method, ...scArgs);
 
-  const account = new Account(options.sourceAccount, '0');
-  const tx = new TransactionBuilder(account, {
-    fee: options.fee ?? BASE_FEE,
-    networkPassphrase: options.networkPassphrase,
-  })
-    .addOperation(operation)
-    .setTimeout(options.timeout ?? 30)
-    .build();
+  cons
 
-  const prepared = await server.prepareTransaction(tx);
-  return prepared.toXDR();
-}
-
-/**
- * Sign a transaction XDR with a specific secret key and return the
- * decorated signature as a base64 string suitable for
- * {@link MultisigCollector.addSignature}.
- * @throws {InvalidSecretKeyError} if the secret key is malformed.
- */
-export function signWithSecretKey(
-  transactionXdr: string,
-  secretKey: string,
-  networkPassphrase: string,
-): string {
-  let keypair: Keypair;
-  try {
-    keypair = Keypair.fromSecret(secretKey);
-  } catch {
-    throw new InvalidSecretKeyError('signWithSecretKey');
-  }
-
-  const tx = TransactionBuilder.fromXDR(transactionXdr, networkPassphrase) as Transaction;
-
-  const hashed = tx.hash();
-  const signature = keypair.signDecorated(hashed);
-  return signature.toXDR().toString('base64');
-}
+/* … truncated 1094 chars — edit only what you need near the top … */

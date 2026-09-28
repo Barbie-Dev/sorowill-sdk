@@ -5,7 +5,7 @@ const { freighterApiMock, mockState } = vi.hoisted(() => ({
   freighterApiMock: {
     getAddress: vi.fn(async () => ({ address: 'GTESTACCOUNT', error: undefined })),
     requestAccess: vi.fn(),
-    getNetworkDetails: vi.fn(),
+    getNetworkDetails: vi.fn().mockResolvedValue({ network: 'TESTNET', networkPassphrase: 'TESTNET' }),
     isConnected: vi.fn(),
     signTransaction: vi.fn(async () => ({ signedTxXdr: 'SIGNED_XDR', error: undefined })),
   },
@@ -164,7 +164,7 @@ describe('beneficiary percentage -> contract basis points', () => {
 
   it('scales createWill beneficiary percentages to basis points (30% -> 3000)', async () => {
     await makeClient().createWill({
-      token: 'CTOKEN',
+      token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
       amount: '1000000',
       beneficiaries: [
         { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 30 },

@@ -74,7 +74,7 @@ describe('buildSep7SigningUri', () => {
     expect(uri).toBeDefined();
     expect(uri).toContain('web+stellar:tx?');
     expect(uri).toContain('xdr=');
-    expect(uri).toContain('callback=https%3A%2F%2Fexample.com%2Fcallback');
+    expect(uri).toContain('callback=url%3Ahttps%3A%2F%2Fexample.com%2Fcallback');
     expect(uri).toContain('network_passphrase=');
   });
 

@@ -99,7 +99,7 @@ describe('createWill amount validation', () => {
   }
 
   const baseParams = {
-    token: 'CTOKEN',
+    token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
     beneficiaries: [
       { address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG', percentage: 100 },
     ],

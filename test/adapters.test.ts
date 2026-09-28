@@ -14,7 +14,8 @@ vi.mock('@albedo-link/intent', () => ({
 }));
 
 import { createAlbedoAdapter } from '../src/adapters/albedo';
-import { freighterAdapter, type WalletAdapter } from '../src/wallet';
+import { WalletNetworkMismatchError } from '../src/errors';
+import { FreighterWalletAdapter, freighterAdapter, type WalletAdapter } from '../src/wallet';
 
 // A no-op reference to prove the exported adapters are assignable to the
 // public WalletAdapter interface (compile-time contract check).
@@ -26,12 +27,39 @@ describe('freighterAdapter', () => {
     expect(typeof freighterAdapter.getPublicKey).toBe('function');
     expect(typeof freighterAdapter.signTransaction).toBe('function');
   });
+
+  it('lets a client detect a Freighter network mismatch', async () => {
+    const spy = vi
+      .spyOn(FreighterWalletAdapter.prototype, 'getNetwork')
+      .mockResolvedValue({ network: 'PUBLIC', networkPassphrase: Networks.PUBLIC });
+    const { SoroWillClient } = await import('../src/SoroWillClient');
+    const client = new SoroWillClient({
+      network: 'testnet',
+      contractId: 'CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR',
+      wallet: freighterAdapter,
+    });
+
+    await expect(
+      client.assertWalletNetwork({ networkPassphrase: Networks.TESTNET }),
+    ).rejects.toBeInstanceOf(WalletNetworkMismatchError);
+    spy.mockRestore();
+  });
 });
 
 describe('createAlbedoAdapter', () => {
   beforeEach(() => {
     publicKeyMock.mockReset();
     txMock.mockReset();
+  });
+
+  it('reports the configured testnet network', async () => {
+    publicKeyMock.mockResolvedValue({ pubkey: 'GABC' });
+    const adapter = createAlbedoAdapter({ networkPassphrase: Networks.TESTNET });
+    const expected = { network: 'testnet', networkPassphrase: Networks.TESTNET };
+
+    await expect(adapter.connect()).resolves.toEqual({ publicKey: 'GABC', ...expected });
+    await expect(adapter.reconnect()).resolves.toEqual({ publicKey: 'GABC', ...expected });
+    await expect(adapter.getNetwork?.()).resolves.toEqual(expected);
   });
 
   it('returns the public key selected in Albedo', async () => {
@@ -223,6 +251,27 @@ describe.each([
     await expect(adapter.getPublicKey()).rejects.toThrow('Call connect() first');
   });
 
+  it('reconnect() restores an existing provider connection without prompting', async () => {
+    const provider: InjectedWalletProvider = {
+      ...injectedProvider(),
+      isConnected: vi.fn().mockResolvedValue(true),
+      getPublicKey: vi.fn().mockResolvedValue('GTEST'),
+      getNetwork: vi.fn().mockResolvedValue({ network: 'testnet', networkPassphrase: Networks.TESTNET }),
+    };
+    const adapter = new Adapter(provider);
+
+    await expect(adapter.reconnect()).resolves.toEqual(connection);
+    expect(provider.connect).not.toHaveBeenCalled();
+  });
+
+  it('reconnect() falls back to connect() when nothing can be restored', async () => {
+    const provider = injectedProvider();
+    const adapter = new Adapter(provider);
+
+    await expect(adapter.reconnect()).resolves.toEqual(connection);
+    expect(provider.connect).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects signTransaction() with a clear error before connect()', async () => {
     const adapter = new Adapter(injectedProvider());
 
@@ -246,6 +295,28 @@ describe('LobstrWalletAdapter', () => {
       ...overrides,
     };
   }
+
+  it('reconnect() restores a live session without a new pairing URI', async () => {
+    const onPairingUri = vi.fn();
+    const client = lobstrClient({
+      getNetwork: vi.fn().mockResolvedValue({ network: 'testnet', networkPassphrase: Networks.TESTNET }),
+    });
+    const adapter = new LobstrWalletAdapter({ client, onPairingUri });
+
+    await expect(adapter.reconnect()).resolves.toEqual(connection);
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(onPairingUri).not.toHaveBeenCalled();
+  });
+
+  it('reconnect() starts a new pairing when no session exists', async () => {
+    const onPairingUri = vi.fn();
+    const client = lobstrClient({ isConnected: vi.fn().mockResolvedValue(false) });
+    const adapter = new LobstrWalletAdapter({ client, onPairingUri });
+
+    await expect(adapter.reconnect()).resolves.toEqual(connection);
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(onPairingUri).toHaveBeenCalledWith('wc:pairing@2?key=value');
+  });
 
   it('publishes a pairing URI and waits for mobile approval', async () => {
     const approved = vi.fn().mockResolvedValue(connection);

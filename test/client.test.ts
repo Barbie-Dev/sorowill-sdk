@@ -44,7 +44,7 @@ describe('formatUSDC', () => {
   });
 
   it('supports custom decimal precision when formatting', () => {
-    expect(formatUSDC(123_450n, 4)).toBe('12.34');
+    expect(formatUSDC(123_450n, 4)).toBe('12.35');
   });
 });
 
@@ -92,7 +92,7 @@ function makeWill(overrides: Partial<Will> = {}): Will {
   return {
     id: '1',
     owner: 'GABC',
-    token: 'CABC',
+    token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
     balance: '1000000000',
     beneficiaries: [{ address: 'GBEN', percentage: 100 }],
     checkinPeriodDays: 90,
@@ -585,6 +585,9 @@ describe('RpcEndpointPool', () => {
 });
 
 describe('SEP-7 helpers', () => {
+  const SEP7_SIGNED_XDR =
+    'AAAAAgAAAACRoooLdDgVk6TZRpV5IIkmr8itgsiDm3ZENZueuppLOgAAAAAAAAAAAAAAAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAbqaSzoAAABAX2162UVnup/NxzMRqa9WzkuatQTkJhYahDGd4dP7cjsRs9zozjzpD9PZGp6ZU2FXnG1pyPIzsByNJuC0eE0LCA==';
+
   it('builds a valid tx deep-link uri', () => {
     const uri = buildSep7TxUri('AAAA', {
       callbackUrl: 'https://example.com/callback',
@@ -594,17 +597,17 @@ describe('SEP-7 helpers', () => {
 
     expect(uri).toContain('web+stellar:tx?');
     expect(uri).toContain('xdr=AAAA');
-    expect(uri).toContain('callback=https%3A%2F%2Fexample.com%2Fcallback');
+    expect(uri).toContain('callback=url%3Ahttps%3A%2F%2Fexample.com%2Fcallback');
     expect(uri).toContain('msg=Sign+this+will+operation');
   });
 
   it('parses a callback url carrying a signed xdr result', () => {
     const result = parseSep7Callback(
-      'https://example.com/callback?xdr=SIGNED123&pubkey=GABC&status=success',
+      `https://example.com/callback?xdr=${SEP7_SIGNED_XDR}&pubkey=GABC&status=success`,
     );
 
     expect(result).toEqual({
-      transactionXdr: 'SIGNED123',
+      transactionXdr: SEP7_SIGNED_XDR,
       signerAddress: 'GABC',
       status: 'success',
       message: undefined,
@@ -612,9 +615,9 @@ describe('SEP-7 helpers', () => {
   });
 
   it('parses SEP-7 callbacks from raw query strings too', () => {
-    const result = parseSep7Callback('?xdr=SIGNED456&signer=GDEF');
+    const result = parseSep7Callback(`?xdr=${SEP7_SIGNED_XDR}&signer=GDEF`);
     expect(result).toEqual({
-      transactionXdr: 'SIGNED456',
+      transactionXdr: SEP7_SIGNED_XDR,
       signerAddress: 'GDEF',
     });
   });

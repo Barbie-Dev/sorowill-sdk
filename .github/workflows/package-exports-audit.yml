@@ -27,11 +27,36 @@ jobs:
       - name: Run export audit tests
         run: npm test -- package-exports-audit.test.ts
 
-      - name: Install arethetypeswrong for type checking
-        run: npm install -D @arethetypeswrong/cli
-
       - name: Check ESM and CJS type resolution
-        run: npx arethetypeswrong --check-all dist/index.js dist/index.cjs || true
+        run: |
+          # Run arethetypeswrong via npx (pinned) without mutating package.json or the lockfile.
+          # Known/ignored problems are listed explicitly in the allowlist below; any other
+          # type-resolution problem fails the workflow.
+          set -o pipefail
+
+          ALLOWLIST="FalseESM|FalseCJS|CJSResolvesToESM"
+
+          npx --yes @arethetypeswrong/cli@0.17.4 --check-all dist/index.js dist/index.cjs --format json > attw.json
+
+          node -e "
+          const fs = require('fs');
+          const allowlist = new Set(process.env.ALLOWLIST.split('|'));
+          const report = JSON.parse(fs.readFileSync('attw.json', 'utf8'));
+
+          const problems = (report.problems || []).filter((p) => !allowlist.has(p.name));
+
+          if (problems.length > 0) {
+            console.error('arethetypeswrong found type-resolution problems:');
+            for (const p of problems) {
+              console.error(' - ' + p.name + (p.resolutionKind ? ' (' + p.resolutionKind + ')' : ''));
+            }
+            process.exit(1);
+          }
+
+          console.log('✓ No unexpected type-resolution problems');
+          "
+        env:
+          ALLOWLIST: FalseESM|FalseCJS|CJSResolvesToESM
 
       - name: Validate package.json exports
         run: |

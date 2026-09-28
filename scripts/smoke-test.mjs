@@ -91,11 +91,48 @@ assert.strictEqual(typeof useWillsByOwner, 'function', 'CJS useWillsByOwner is f
 const err = new SoroWillError('CJS smoke test');
 assert.ok(err instanceof Error, 'CJS SoroWillError instance check');
 const hooks = new HookManager();
-assert.strictEqual(typeof hooks.runBeforeInvoke, 'function', 'CJS HookManager method check');
+assert.strictEqual(typeof hooks.runBeforeInvoke, 'function', 'HookManager method check');
 console.log('CJS entry points smoke test passed.');
 `;
   fs.writeFileSync(path.join(tempDir, 'test-cjs.cjs'), cjsScript);
   execSync('node test-cjs.cjs', { cwd: tempDir, stdio: 'inherit' });
+
+  console.log('Running browser bundler smoke test for the react subpath...');
+  const browserScript = `
+import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const reactEntry = fileURLToPath(import.meta.resolve('@sorowill/sdk/react'));
+const source = fs.readFileSync(reactEntry, 'utf-8');
+
+assert.ok(
+  !source.includes('node:module'),
+  'react subpath must not reference node:module (breaks browser bundlers)',
+);
+assert.ok(
+  !source.includes('createRequire'),
+  'react subpath must not use createRequire (Node-only API)',
+);
+assert.ok(
+  !source.includes('import.meta.url'),
+  'react subpath must not rely on import.meta.url (unavailable in CJS output)',
+);
+
+const reactDir = path.dirname(reactEntry);
+const reactFiles = fs.readdirSync(reactDir).filter((f) => /\.(m?js|cjs)$/.test(f));
+for (const file of reactFiles) {
+  const contents = fs.readFileSync(path.join(reactDir, file), 'utf-8');
+  assert.ok(
+    !contents.includes('node:module') && !contents.includes('createRequire'),
+    \`react subpath file \${file} must be free of Node-only module loading\`,
+  );
+}
+console.log('Browser bundler smoke test passed.');
+`;
+  fs.writeFileSync(path.join(tempDir, 'test-browser.mjs'), browserScript);
+  execSync('node test-browser.mjs', { cwd: tempDir, stdio: 'inherit' });
 
   console.log('All smoke tests passed successfully!');
 } finally {

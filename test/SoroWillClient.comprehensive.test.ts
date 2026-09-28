@@ -8,7 +8,7 @@ function makeStubSpec() {
   const rawWill = {
     id: 1n,
     owner: 'GOWNER',
-    token: 'CTOKEN',
+    token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
     balance: 1_000_000n,
     beneficiaries: [{ address: 'GBEN', percentage: 100 }],
     checkin_period_days: 90n,
@@ -278,7 +278,7 @@ describe('SoroWillClient public methods', () => {
       rpcServer: makeRpcServer() as unknown as SoroWillRpcServer,
     });
     const result = await client.createWill({
-      token: 'CTOKEN',
+      token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
       amount: '1000000',
       beneficiaries: [
         { address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG', percentage: 100 },

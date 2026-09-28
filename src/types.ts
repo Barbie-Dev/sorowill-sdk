@@ -5,7 +5,7 @@
  * **IMPORTANT**: These values must be kept in sync manually with the
  * contract repo until the spec-drift tooling proposed there exists.
  *
- * @see {@link https://github.com/SoroWill/sorowill-contracts/blob/main/src/errors.rs}
+ * @see {@link https://github.com/SoroWill/sorowill-contracts/blob/main/contracts/will/src/errors.rs}
  */
 export enum WillErrorCode {
   /** The will was not found. */
@@ -187,78 +187,78 @@ export interface PaginatedWillsResult {
   nextCursor: string | null;
 }
 
-/** Normalized contract event emitted by the SoroWill contract. */
-export interface SoroWillEvent {
-  id: string;
-  cursor: string;
-  ledger: number | null;
-  ledgerClosedAt: Date | null;
-  contractId: string | null;
-  txHash: string | null;
-  type: string | null;
-  topics: unknown[];
-  value: unknown;
-  raw: unknown;
-}
-
-/** Which transport backs an active event subscription. */
-export type EventSubscriptionTransport = 'polling' | 'websocket';
-
-/** Controls how event subscriptions are established and paged. */
-export interface EventSubscriptionOptions {
-  /** Cursor to resume from. Omit to start from the latest available cursor. */
-  cursor?: string;
-  /** Maximum number of events to request per fetch/stream chunk. */
-  pageSize?: number;
-  /** Polling interval when the polling transport is used. */
-  pollIntervalMs?: number;
-  /**
-   * Force a specific transport, or auto-negotiate with WebSocket fallback.
-   * `'websocket'` requires the client to be configured with both
-   * `webSocketFactory` and `eventStreamUrl` — unlike `'auto'`, it throws
-   * `WebSocketNotConfiguredError` rather than silently falling back to
-   * polling when they aren't.
-   */
-  transport?: 'auto' | EventSubscriptionTransport;
-  /**
-   * How long to wait for the WebSocket to open before falling back to HTTP
-   * polling. Guards against a server that accepts the connection but never
-   * completes (or fails) the WebSocket handshake. Defaults to 10000 ms; set
-   * to 0 to wait indefinitely.
-   */
-  websocketConnectTimeoutMs?: number;
-  /** Optional callback for transport-level errors. */
-  onError?: (error: Error) => void;
-}
-
-/** Handle for an active event subscription. */
-export interface EventSubscription {
-  readonly transport: EventSubscriptionTransport;
-  readonly closed: boolean;
-  close(): void;
-}
-
-/** Options accepted by individual SDK calls. */
-export interface RequestOptions {
-  /** Overrides the client's default RPC timeout for this call. */
-  timeoutMs?: number;
-  /** An AbortSignal that can be used to cancel the in-flight request. */
-  signal?: AbortSignal;
+/**
+ * The structured result some wallet adapters (e.g. WalletConnect) return from
+ * a signing request instead of a bare signed-XDR string.
+ *
+ * `envelope_xdr` is the base64-encoded signed transaction envelope that must
+ * be submitted to the network; `hash` is the transaction hash the wallet
+ * computed while signing. Adapters that return a plain string are still
+ * supported — see {@link TransactionSigner}.
+ */
+export interface SignatureResponse {
+  /** Base64-encoded signed transaction envelope (XDR). */
+  envelope_xdr: string;
+  /** Hex-encoded transaction hash produced by the wallet while signing. */
+  hash: string;
 }
 
 /**
- * A contract invocation to submit via `batch`. Soroban allows only one
- * `InvokeHostFunction` operation per transaction, so a batch holds exactly one.
+ * A function that signs a transaction envelope (XDR) and resolves to the
+ * signed XDR.
+ *
+ * Adapters may resolve either with the signed XDR string directly or with a
+ * {@link SignatureResponse} object. The SDK normalizes both shapes to a string
+ * via {@link normalizeSignatureResponse} and rejects anything else with a
+ * clear error, so a malformed adapter response fails at signing time rather
+ * than silently downstream.
  */
-export interface BatchOperation {
-  /** Contract function name, such as `create_will` or `check_in`. */
-  method: string;
-  /** Native named arguments expected by the deployed contract spec. */
-  args: Record<string, unknown>;
+export type TransactionSigner = (
+  xdr: string,
+) => Promise<string | SignatureResponse>;
+
+/**
+ * Normalize the value resolved by a {@link TransactionSigner} into a signed
+ * XDR string.
+ *
+ * Accepts either a signed-XDR string or a {@link SignatureResponse} object
+ * (returning its `envelope_xdr`). Any other shape — including `null`,
+ * `undefined`, or an object missing `envelope_xdr` — throws a descriptive
+ * error so the failure surfaces at signing time instead of as a cryptic
+ * downstream error.
+ *
+ * @param response - The raw value resolved by a wallet adapter's signer.
+ * @returns The signed transaction envelope as a base64 XDR string.
+ * @throws {Error} If `response` is neither a non-empty string nor a valid
+ *   {@link SignatureResponse}.
+ */
+export function normalizeSignatureResponse(
+  response: string | SignatureResponse,
+): string {
+  if (typeof response === 'string') {
+    if (response.length === 0) {
+      throw new Error(
+        'TransactionSigner returned an empty string; expected a signed XDR envelope.',
+      );
+    }
+    return response;
+  }
+
+  if (
+    response !== null &&
+    typeof response === 'object' &&
+    typeof (response as SignatureResponse).envelope_xdr === 'string' &&
+    (response as SignatureResponse).envelope_xdr.length > 0
+  ) {
+    return (response as SignatureResponse).envelope_xdr;
+  }
+
+  throw new Error(
+    'TransactionSigner returned an invalid response; expected a signed XDR string ' +
+      'or a SignatureResponse object with a non-empty `envelope_xdr` field.',
+  );
 }
 
-/** Result of submitting a batch (a single contract invocation) as a Stellar transaction. */
-export interface BatchResult {
-  txHash: string;
-  createdAt: number;
-}
+/** Normalized contract event emitted by the SoroWill contr
+
+/* … truncated 2578 chars — edit only what you need near the top … */

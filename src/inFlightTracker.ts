@@ -9,70 +9,98 @@ interface InFlightOperation<T> {
 }
 
 /**
- * Maximum number of entries the in-flight map is allowed to hold simultaneously
- * before the oldest entry is evicted (issue #487).
+ * Shared, process-wide tracker used to deduplicate identical concurrent
+ * requests across every SoroWillClient instance (multiple tabs, workers, etc.).
  *
- * In practice a well-behaved application will never approach this ceiling
- * because completed entries are removed via `.finally()`.  The cap exists as a
- * last-resort safety net for entries whose promises are somehow never settled
- * (e.g. a dangling reference prevents garbage collection).
+ * A per-client tracker only deduplicates calls made through the same client
+ * instance. When two clients issue the same request concurrently they each
+ * hold their own tracker and both hit the network. Passing this singleton to
+ * `new SoroWillClient({ inFlightTracker: globalInFlightTracker })` (or simply
+ * reusing a single SoroWillClient instance) makes the deduplication global.
  */
-const DEFAULT_MAX_IN_FLIGHT = 1_000;
-
-/**
- * Time-to-live in milliseconds for an in-flight entry that has not been
- * resolved or rejected via its own `.finally()` handler (issue #487).
- *
- * Five minutes is generous enough to accommodate any realistic Soroban
- * transaction lifecycle (submit → poll → finalise) while still bounding
- * memory usage for long-running keeper bots or backend services.
- */
-const DEFAULT_TTL_MS = 5 * 60 * 1_000;
+export const globalInFlightTracker = /* @__PURE__ */ new InFlightTracker();
 
 export class InFlightTracker {
   private readonly inFlight = new Map<OperationKey, InFlightOperation<unknown>>();
-  private readonly maxInFlight: number;
-  private readonly ttlMs: number;
+  private readonly failedSequences = new Map<OperationKey, FailedOperation>();
 
-  constructor(maxInFlight: number = DEFAULT_MAX_IN_FLIGHT, ttlMs: number = DEFAULT_TTL_MS) {
-    this.maxInFlight = maxInFlight;
-    this.ttlMs = ttlMs;
-  }
-
-  getKey(willId: string | bigint, method: string): OperationKey {
+  getKey(willId: string | bigint, method: string, clientId?: string): OperationKey {
     const id = typeof willId === 'bigint' ? willId.toString() : willId;
-    return `${id}:${method}`;
+    const scope = clientId ?? '';
+    return `${scope}:${id}:${method}`;
   }
 
-  isInFlight(willId: string | bigint, method: string): boolean {
-    const key = this.getKey(willId, method);
-    const op = this.inFlight.get(key);
-    if (!op) return false;
-    // Treat TTL-expired entries as no longer in-flight and evict them lazily.
-    if (this.isExpired(op)) {
-      this.evict(key, op);
+  isInFlight(willId: string | bigint, method: string, clientId?: string): boolean {
+    return this.inFlight.has(this.getKey(willId, method, clientId));
+  }
+
+  getInFlightPromise<T>(
+    willId: string | bigint,
+    method: string,
+    clientId?: string,
+  ): OperationResult<T> | undefined {
+    const op = this.inFlight.get(this.getKey(willId, method, clientId));
+    return op?.promise as OperationResult<T> | undefined;
+  }
+
+  /**
+   * Records that a feeBump operation failed while holding the given sequence
+   * number. A subsequent retry that reuses the same sequence number must not
+   * be treated as a fresh in-flight operation, otherwise the retry can race
+   * with the still-pending failed transaction and reuse an in-use sequence.
+   */
+  markFailed(
+    willId: string | bigint,
+    method: string,
+    sequence: string | bigint,
+    clientId?: string,
+  ): void {
+    const key = this.getKey(willId, method, clientId);
+    this.failedSequences.set(key, {
+      sequence: typeof sequence === 'bigint' ? sequence.toString() : sequence,
+      failedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Returns true when the given sequence number was previously used by a
+   * failed operation for this key and has not yet been superseded. Callers
+   * should advance the sequence number before retrying instead of reusing it.
+   */
+  isSequenceReused(
+    willId: string | bigint,
+    method: string,
+    sequence: string | bigint,
+    clientId?: string,
+  ): boolean {
+    const key = this.getKey(willId, method, clientId);
+    const failed = this.failedSequences.get(key);
+    if (!failed) {
       return false;
     }
-    return true;
+    if (Date.now() - failed.failedAt > FAILED_SEQUENCE_TTL_MS) {
+      this.failedSequences.delete(key);
+      return false;
+    }
+    const seq = typeof sequence === 'bigint' ? sequence.toString() : sequence;
+    return failed.sequence === seq;
   }
 
-  getInFlightPromise<T>(willId: string | bigint, method: string): OperationResult<T> | undefined {
-    const key = this.getKey(willId, method);
-    const op = this.inFlight.get(key);
-    if (!op) return undefined;
-    if (this.isExpired(op)) {
-      this.evict(key, op);
-      return undefined;
-    }
-    return op.promise as OperationResult<T> | undefined;
+  /**
+   * Clears the failed-sequence record for a key once a retry has advanced
+   * past the previously failed sequence number.
+   */
+  clearFailed(willId: string | bigint, method: string, clientId?: string): void {
+    this.failedSequences.delete(this.getKey(willId, method, clientId));
   }
 
   track<T>(
     willId: string | bigint,
     method: string,
     operation: (signal: AbortSignal) => PromiseLike<T>,
+    clientId?: string,
   ): PromiseLike<T> {
-    const key = this.getKey(willId, method);
+    const key = this.getKey(willId, method, clientId);
 
     const existing = this.inFlight.get(key);
     if (existing) {
@@ -90,13 +118,38 @@ export class InFlightTracker {
     }
 
     const controller = new AbortController();
-    const promise = Promise.resolve(operation(controller.signal)).finally(() => {
-      // Primary cleanup path: remove the entry as soon as the operation settles.
-      this.inFlight.delete(key);
+    const entry = { controller } as InFlightOperation<T>;
+    entry.promise = Promise.resolve(operation(controller.signal)).finally(() => {
+      // Only remove the entry this call created; a newer track() may own the key now.
+      if (this.inFlight.get(key) === entry) {
+        this.inFlight.delete(key);
+      }
     });
 
-    this.inFlight.set(key, { promise, controller, createdAt: Date.now() });
-    return promise;
+    this.inFlight.set(key, entry as InFlightOperation<unknown>);
+    return entry.promise;
+  }
+
+  /**
+   * Runs `operation` only if no operation is currently in flight for the given
+   * will/method pair. Unlike {@link track}, this is intended for timeout-driven
+   * follow-up work (e.g. auto fee-bump) where the caller must first confirm the
+   * original operation is still pending before acting. If the original operation
+   * has already settled (success or failure), the in-flight entry is gone and the
+   * guard prevents a duplicate submission.
+   */
+  trackIfPending<T>(
+    willId: string | bigint,
+    method: string,
+    operation: (signal: AbortSignal) => PromiseLike<T>,
+  ): PromiseLike<T> | undefined {
+    const key = this.getKey(willId, method);
+
+    if (!this.inFlight.has(key)) {
+      return undefined;
+    }
+
+    return this.track(willId, method, operation);
   }
 
   clear(): void {
@@ -104,10 +157,11 @@ export class InFlightTracker {
       controller.abort();
     }
     this.inFlight.clear();
+    this.failedSequences.clear();
   }
 
-  abort(willId: string | bigint, method: string): void {
-    const key = this.getKey(willId, method);
+  abort(willId: string | bigint, method: string, clientId?: string): void {
+    const key = this.getKey(willId, method, clientId);
     const op = this.inFlight.get(key);
     if (op) {
       op.controller.abort();

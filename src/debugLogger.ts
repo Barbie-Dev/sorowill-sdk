@@ -91,13 +91,15 @@ export class DebugLogger {
     if (!this.enabled) return;
 
     const errorMessage = error instanceof Error ? error.message : String(error);
+    // Stack traces are only captured when debug logging is enabled (checked above).
+    const stack = error instanceof Error ? error.stack : undefined;
 
     const log: DebugLog = {
       timestamp: new Date().toISOString(),
       level: 'error',
       method,
       willId,
-      details: { error: errorMessage },
+      details: { error: errorMessage, stack },
     };
 
     this.log(log);

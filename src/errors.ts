@@ -203,6 +203,33 @@ export class BeneficiaryValidationError extends SoroWillError {
 }
 
 /**
+ * Raised by `createWill` before any RPC call when the guardian list is
+ * invalid: a malformed Stellar address, a duplicate entry, or the owner's own
+ * address. `reason` names the problem and `guardian` the offending address.
+ */
+export class GuardianValidationError extends SoroWillError {
+  readonly reason: 'invalid_address' | 'duplicate' | 'owner_is_guardian';
+  readonly guardian: string;
+
+  constructor(
+    reason: 'invalid_address' | 'duplicate' | 'owner_is_guardian',
+    guardian: string,
+    options?: ErrorOptions,
+  ) {
+    const detail =
+      reason === 'invalid_address'
+        ? 'is not a valid Stellar public key'
+        : reason === 'duplicate'
+          ? 'appears more than once'
+          : 'is the will owner and cannot also be a guardian';
+    super(`Invalid guardian "${guardian}": address ${detail}.`, options);
+    this.name = new.target.name;
+    this.reason = reason;
+    this.guardian = guardian;
+  }
+}
+
+/**
  * Raised when the connected wallet's active network does not match the
  * network {@link SoroWillClient} was configured with — e.g. Freighter is set
  * to mainnet while the app instantiated a testnet client. Thrown before a

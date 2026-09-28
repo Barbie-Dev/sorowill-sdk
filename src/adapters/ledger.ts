@@ -1,7 +1,7 @@
 import type Str from '@ledgerhq/hw-app-str';
 import { StrKey, TransactionBuilder } from '@stellar/stellar-sdk';
 
-import { SignTransactionTimeoutError } from '../errors';
+import { SignTransactionTimeoutError, WalletNetworkMismatchError } from '../errors';
 
 import type { SignTransactionOptions, WalletAdapter, WalletConnection } from './types';
 
@@ -110,6 +110,9 @@ export class LedgerWalletAdapter implements WalletAdapter {
     transactionXdr: string,
     options: SignTransactionOptions,
   ): Promise<string> {
+    if (options.networkPassphrase !== this.options.networkPassphrase) {
+      throw new WalletNetworkMismatchError(this.options.networkPassphrase, options.networkPassphrase);
+    }
     const publicKey = await this.getPublicKey();
     const app = await this.getApp();
     const transaction = TransactionBuilder.fromXDR(transactionXdr, options.networkPassphrase);

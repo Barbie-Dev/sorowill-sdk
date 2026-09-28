@@ -21,6 +21,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # npm ci already refuses to install when package-lock.json cannot satisfy
+      # package.json; this step additionally requires the lock's recorded ranges
+      # to match package.json exactly, so stale lock files fail fast.
+      - name: Verify lock file is up to date
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const root = require("./package-lock.json").packages[""];
+            const fields = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+            const bad = fields.filter((f) => JSON.stringify(pkg[f] ?? {}) !== JSON.stringify(root[f] ?? {}));
+            if (bad.length) {
+              console.error(`::error file=package-lock.json::package-lock.json is out of sync with package.json (${bad.join(", ")}). Run npm install and commit the updated lock file.`);
+              process.exit(1);
+            }
+          '
+
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
@@ -39,7 +55,16 @@ jobs:
       - name: Test with coverage
         run: npm run test:coverage
 
+      - name: Enforce coverage goal (80%)
+        run: npx nyc check-coverage --lines 80 --functions 80 --branches 80 --statements 80
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+
       - name: Warn if Soroban sandbox integration tests are skipped
         if: env.SOROBAN_CONTRACT_ID == '' || env.SOROBAN_OWNER_ACCOUNT == '' || env.SOROBAN_BENEFICIARY_ACCOUNT == ''
         run: echo "::warning file=test/soroban-sandbox-integration.test.ts::soroban-sandbox-integration.test.ts was skipped — SOROBAN_CONTRACT_ID, SOROBAN_OWNER_ACCOUNT, and SOROBAN_BENEFICIARY_ACCOUNT are not set in this workflow. See CONTRIBUTING.md for how to run it locally against a sandbox."
-

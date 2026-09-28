@@ -19,6 +19,13 @@ export interface RequestQueueOptions {
    * may still be delayed if the rate limit has been exhausted.
    */
   requestsPerSecond?: number;
+  /**
+   * Optional account key. When provided, all {@link RequestQueue} instances
+   * created with the same key share a single underlying queue, so operations
+   * for a given account are serialized even if multiple clients (or multiple
+   * queues) are created for that account in rapid succession.
+   */
+  account?: string;
 }
 
 /** Priority level for requests in the queue. Higher priority requests are processed first within FIFO ordering constraints. */
@@ -42,23 +49,60 @@ interface PendingRequest<T> {
   enqueuedAt: number;
 }
 
+/**
+ * Shared state for a single account. Multiple {@link RequestQueue} instances
+ * created for the same account delegate to the same {@link QueueCore}, which
+ * guarantees their operations are serialized against one another.
+ */
+class QueueCore {
+  readonly maxConcurrent: number;
+  readonly requestsPerSecond: number;
+  readonly pending: Array<PendingRequest<unknown>> = [];
+  readonly starts: number[] = [];
+  active = 0;
+  wakeTimer: ReturnType<typeof setTimeout> | undefined;
+  refCount = 0;
+
+  constructor(maxConcurrent: number, requestsPerSecond: number) {
+    this.maxConcurrent = maxConcurrent;
+    this.requestsPerSecond = requestsPerSecond;
+  }
+}
+
+/**
+ * Process-wide registry of shared queue cores keyed by account. This is what
+ * makes {@link RequestQueue} effectively a singleton per account: two queues
+ * constructed for the same account within milliseconds coordinate through the
+ * same core instead of racing each other.
+ */
+const sharedCores = new Map<string, QueueCore>();
+
 /** FIFO queue that applies concurrency, rate, and timeout limits to asynchronous requests. */
 export class RequestQueue {
-  private readonly maxConcurrent: number;
-  private readonly requestsPerSecond: number;
-  private readonly pending: Array<PendingRequest<unknown>> = [];
-  private readonly starts: number[] = [];
-  private active = 0;
-  private wakeTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly core: QueueCore;
+  private readonly account: string | undefined;
+  private released = false;
 
   constructor(options: RequestQueueOptions = {}) {
-    this.maxConcurrent = options.maxConcurrent ?? 4;
-    this.requestsPerSecond = options.requestsPerSecond ?? 10;
-    if (!Number.isInteger(this.maxConcurrent) || this.maxConcurrent < 1) {
+    const maxConcurrent = options.maxConcurrent ?? 4;
+    const requestsPerSecond = options.requestsPerSecond ?? 10;
+    if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
       throw new RangeError('maxConcurrent must be a positive integer');
     }
-    if (!Number.isInteger(this.requestsPerSecond) || this.requestsPerSecond < 1) {
+    if (!Number.isInteger(requestsPerSecond) || requestsPerSecond < 1) {
       throw new RangeError('requestsPerSecond must be a positive integer');
+    }
+    this.account = options.account;
+    if (this.account !== undefined) {
+      let core = sharedCores.get(this.account);
+      if (core === undefined) {
+        core = new QueueCore(maxConcurrent, requestsPerSecond);
+        sharedCores.set(this.account, core);
+      }
+      core.refCount += 1;
+      this.core = core;
+    } else {
+      this.core = new QueueCore(maxConcurrent, requestsPerSecond);
     }
   }
 
@@ -70,20 +114,17 @@ export class RequestQueue {
       return Promise.reject(signal.reason);
     }
     return new Promise<T>((resolve, reject) => {
-      let abortListener: (() => void) | undefined;
+      const request: PendingRequest<T> = { run, resolve, reject, timeoutMs, signal, abortListener: undefined, priority, enqueuedAt: Date.now() };
       if (signal) {
-        abortListener = () => {
+        request.abortListener = () => {
+          // Drop the request from the queue so an aborted request never runs.
+          const index = this.pending.indexOf(request as PendingRequest<unknown>);
+          if (index !== -1) this.pending.splice(index, 1);
+          this.removeAbortListener(request);
           reject(signal.reason);
-          removeAbortListener();
         };
-        signal.addEventListener('abort', abortListener);
+        signal.addEventListener('abort', request.abortListener);
       }
-      const removeAbortListener = () => {
-        if (signal && abortListener) {
-          signal.removeEventListener('abort', abortListener);
-        }
-      };
-      const request: PendingRequest<T> = { run, resolve, reject, timeoutMs, signal, abortListener, priority, enqueuedAt: Date.now() };
       this.pending.push(request as PendingRequest<unknown>);
       this.drain();
     });
@@ -98,14 +139,31 @@ export class RequestQueue {
    * requests enqueued after unmount/teardown do not run to completion.
    */
   rejectAll(reason: unknown): void {
-    if (this.wakeTimer !== undefined) {
-      clearTimeout(this.wakeTimer);
-      this.wakeTimer = undefined;
+    if (this.core.wakeTimer !== undefined) {
+      clearTimeout(this.core.wakeTimer);
+      this.core.wakeTimer = undefined;
     }
-    const drained = this.pending.splice(0);
+    const drained = this.core.pending.splice(0);
     for (const request of drained) {
       this.removeAbortListener(request);
       request.reject(reason);
+    }
+  }
+
+  /**
+   * Releases this queue's reference to the shared per-account core. When the
+   * last queue for an account is released, the shared core is dropped so a
+   * later client for the same account starts from a clean state.
+   */
+  release(): void {
+    if (this.released) return;
+    this.released = true;
+    if (this.account === undefined) return;
+    const core = sharedCores.get(this.account);
+    if (core !== this.core) return;
+    core.refCount -= 1;
+    if (core.refCount <= 0) {
+      sharedCores.delete(this.account);
     }
   }
 
@@ -116,49 +174,51 @@ export class RequestQueue {
   }
 
   private drain(): void {
-    if (this.wakeTimer !== undefined) {
-      clearTimeout(this.wakeTimer);
-      this.wakeTimer = undefined;
+    const core = this.core;
+    if (core.wakeTimer !== undefined) {
+      clearTimeout(core.wakeTimer);
+      core.wakeTimer = undefined;
     }
     const now = Date.now();
-    while (this.starts[0] !== undefined && this.starts[0] <= now - 1_000) {
-      this.starts.shift();
+    while (core.starts[0] !== undefined && core.starts[0] <= now - 1_000) {
+      core.starts.shift();
     }
     while (
-      this.active < this.maxConcurrent &&
-      this.starts.length < this.requestsPerSecond &&
-      this.pending.length > 0
+      core.active < core.maxConcurrent &&
+      core.starts.length < core.requestsPerSecond &&
+      core.pending.length > 0
     ) {
       const request = this.selectNextRequest();
       if (request === undefined) break;
-      this.active += 1;
-      this.starts.push(Date.now());
+      core.active += 1;
+      core.starts.push(Date.now());
       this.removeAbortListener(request);
       void this.execute(request);
     }
     if (
-      this.pending.length > 0 &&
-      this.active < this.maxConcurrent &&
-      this.starts[0] !== undefined
+      core.pending.length > 0 &&
+      core.active < core.maxConcurrent &&
+      core.starts[0] !== undefined
     ) {
-      const delay = Math.max(1, this.starts[0] + 1_000 - Date.now());
-      this.wakeTimer = setTimeout(() => this.drain(), delay);
+      const delay = Math.max(1, core.starts[0] + 1_000 - Date.now());
+      core.wakeTimer = setTimeout(() => this.drain(), delay);
     }
   }
 
   private selectNextRequest(): PendingRequest<unknown> | undefined {
-    if (this.pending.length === 0) {
+    const pending = this.core.pending;
+    if (pending.length === 0) {
       return undefined;
     }
     let selectedIndex = 0;
-    let selectedPriority = this.pending[0]!.priority;
-    for (let i = 1; i < this.pending.length; i++) {
-      if (this.pending[i]!.priority > selectedPriority) {
+    let selectedPriority = pending[0]!.priority;
+    for (let i = 1; i < pending.length; i++) {
+      if (pending[i]!.priority > selectedPriority) {
         selectedIndex = i;
-        selectedPriority = this.pending[i]!.priority;
+        selectedPriority = pending[i]!.priority;
       }
     }
-    const [request] = this.pending.splice(selectedIndex, 1);
+    const [request] = pending.splice(selectedIndex, 1);
     return request;
   }
 
@@ -183,7 +243,7 @@ export class RequestQueue {
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       this.removeAbortListener(request);
-      this.active -= 1;
+      this.core.active -= 1;
       this.drain();
     }
   }

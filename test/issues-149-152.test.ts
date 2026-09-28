@@ -39,7 +39,7 @@ vi.mock('@stellar/freighter-api', () => ({
   default: {
     getAddress: vi.fn(async () => ({ address: mockState.walletPublicKey, error: undefined })),
     requestAccess: vi.fn(),
-    getNetworkDetails: vi.fn(),
+    getNetworkDetails: vi.fn().mockResolvedValue({ network: 'TESTNET', networkPassphrase: 'Test SDF Network ; September 2015' }),
     isConnected: vi.fn(),
     signTransaction: vi.fn(async (xdr: string) => xdr),
   },
@@ -208,7 +208,7 @@ describe('#149 – createWill day-param validation', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90.5,   // non-integer
@@ -222,7 +222,7 @@ describe('#149 – createWill day-param validation', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90.5,
@@ -237,7 +237,7 @@ describe('#149 – createWill day-param validation', () => {
     let caught: unknown;
     try {
       await client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90.5,
@@ -256,7 +256,7 @@ describe('#149 – createWill day-param validation', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -270,7 +270,7 @@ describe('#149 – createWill day-param validation', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -284,7 +284,7 @@ describe('#149 – createWill day-param validation', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 0,
@@ -298,7 +298,7 @@ describe('#149 – createWill day-param validation', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: -1,
@@ -314,7 +314,7 @@ describe('#149 – createWill day-param validation', () => {
     // pollTransaction is 1n (a bigint), which funcResToNative passes through.
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -351,7 +351,7 @@ describe('#150 – invoke() diagnostic fields on failure', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -375,7 +375,7 @@ describe('#150 – invoke() diagnostic fields on failure', () => {
     let caught: unknown;
     try {
       await client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -405,7 +405,7 @@ describe('#150 – invoke() diagnostic fields on failure', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -428,7 +428,7 @@ describe('#150 – invoke() diagnostic fields on failure', () => {
     let caught: unknown;
     try {
       await client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -456,7 +456,7 @@ describe('#150 – invoke() diagnostic fields on failure', () => {
     let caught: unknown;
     try {
       await client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -497,7 +497,7 @@ describe('#152 – unfunded account surface as AccountNotFundedError', () => {
     const client = makeClient();
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -514,7 +514,7 @@ describe('#152 – unfunded account surface as AccountNotFundedError', () => {
     let caught: unknown;
     try {
       await client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -541,7 +541,7 @@ describe('#152 – unfunded account surface as AccountNotFundedError', () => {
     let caught: unknown;
     try {
       await client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -563,7 +563,7 @@ describe('#152 – unfunded account surface as AccountNotFundedError', () => {
     // Should resolve, not reject with AccountNotFundedError
     await expect(
       client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,
@@ -580,7 +580,7 @@ describe('#152 – unfunded account surface as AccountNotFundedError', () => {
     let caught: unknown;
     try {
       await client.createWill({
-        token: 'CTKN',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: VALID_BENEFICIARIES,
         checkinPeriodDays: 90,

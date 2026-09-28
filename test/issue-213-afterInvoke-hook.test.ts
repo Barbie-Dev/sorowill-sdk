@@ -5,7 +5,7 @@ const { freighterApiMock, mockState } = vi.hoisted(() => ({
   freighterApiMock: {
     getAddress: vi.fn(async () => ({ address: 'GTESTACCOUNT', error: undefined })),
     requestAccess: vi.fn(),
-    getNetworkDetails: vi.fn(),
+    getNetworkDetails: vi.fn().mockResolvedValue({ network: 'TESTNET', networkPassphrase: 'TESTNET' }),
     isConnected: vi.fn(),
     signTransaction: vi.fn(),
   },
@@ -222,7 +222,7 @@ describe('Issue #213: Throwing afterInvoke hook on success path makes invoke() r
     let result = null;
     try {
       result = await client.createWill({
-        token: 'USDC_CONTRACT',
+        token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
         amount: '1000000',
         beneficiaries: [{ address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG', percentage: 100 }],
         checkinPeriodDays: 30,
@@ -251,7 +251,7 @@ describe('Issue #213: Throwing afterInvoke hook on success path makes invoke() r
     });
 
     await client.createWill({
-      token: 'USDC_CONTRACT',
+      token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
       amount: '1000000',
       beneficiaries: [{ address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG', percentage: 100 }],
       checkinPeriodDays: 30,
@@ -273,7 +273,7 @@ describe('Issue #213: Throwing afterInvoke hook on success path makes invoke() r
     });
 
     await client.createWill({
-      token: 'USDC_CONTRACT',
+      token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
       amount: '1000000',
       beneficiaries: [{ address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG', percentage: 100 }],
       checkinPeriodDays: 30,
@@ -301,7 +301,7 @@ describe('Issue #213: Throwing afterInvoke hook on success path makes invoke() r
     });
 
     const result = await client.createWill({
-      token: 'USDC_CONTRACT',
+      token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
       amount: '1000000',
       beneficiaries: [{ address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG', percentage: 100 }],
       checkinPeriodDays: 30,
@@ -328,7 +328,7 @@ describe('Issue #213: Throwing afterInvoke hook on success path makes invoke() r
     });
 
     await client.createWill({
-      token: 'USDC_CONTRACT',
+      token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
       amount: '1000000',
       beneficiaries: [{ address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG', percentage: 100 }],
       checkinPeriodDays: 30,

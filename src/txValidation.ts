@@ -35,8 +35,19 @@ function operationsMatch(intended: xdr.Operation, prepared: xdr.Operation): bool
     }
 
     if (intendedHostFn.switch() === xdr.HostFunctionType.hostFunctionTypeInvokeContract()) {
-      const intendedArgs = intendedHostFn.invokeContract().args();
-      const preparedArgs = preparedHostFn.invokeContract().args();
+      const intendedInvoke = intendedHostFn.invokeContract();
+      const preparedInvoke = preparedHostFn.invokeContract();
+
+      if (
+        intendedInvoke.contractAddress().toXDR('base64') !==
+          preparedInvoke.contractAddress().toXDR('base64') ||
+        intendedInvoke.functionName().toString() !== preparedInvoke.functionName().toString()
+      ) {
+        return false;
+      }
+
+      const intendedArgs = intendedInvoke.args();
+      const preparedArgs = preparedInvoke.args();
 
       if (!intendedArgs || !preparedArgs || intendedArgs.length !== preparedArgs.length) {
         return false;

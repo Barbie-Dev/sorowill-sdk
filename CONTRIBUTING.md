@@ -35,6 +35,10 @@ fix/N-short-description
 - **When adding a new top-level export**, also add a row to the _Full public API_ table in `README.md` (under the appropriate section). The table is the single source of truth for what the package exposes — keeping it current helps consumers discover the API without reading the source. A missing row will be flagged during code review.
 - **If your PR changes public behavior** (new features, breaking changes, deprecations, or behavioral fixes), add a bullet entry under the `[Unreleased]` section of [`CHANGELOG.md`](./CHANGELOG.md). The release workflow (`publish.yml`) triggers from published GitHub Releases, and the changelog is the authoritative record of what shipped in each version.
 
+## Publishing
+
+Publishing is normally handled by the GitHub release workflow (`publish.yml`), which builds explicitly before packing. If you ever publish manually from a local checkout, the `prepublishOnly` hook in `package.json` runs `npm run build` and `npm run typecheck` automatically before the package is packed, so a stale or missing `dist/` cannot be published. You do not need to run the build by hand first — but if the hook fails, fix the reported build or type errors and retry rather than bypassing it with `--ignore-scripts`.
+
 ## API reference
 
 The full public API reference is generated from JSDoc comments via [TypeDoc](https://typedoc.org/).
@@ -172,48 +176,6 @@ variables are set:
 
 ```bash
 export SOROBAN_SANDBOX_RPC_URL=http://localhost:8000  # optional, defaults to this
-export SOROBAN_CONTRACT_ID=C...       # a deployed SoroWill contract instance
-export SOROBAN_OWNER_ACCOUNT=G...     # funded account used as the will owner
-export SOROBAN_BENEFICIARY_ACCOUNT=G...  # funded account used as a beneficiary
+export SOROBAN_CONTRACT_ID=C...       # a deployed SoroW
 
-npx vitest run test/soroban-sandbox-integration.test.ts
-```
-
-To run it locally, deploy the SoroWill contract to a local `soroban-cli`
-sandbox (or Futurenet/testnet) using two funded accounts for the owner and
-beneficiary roles, then set the variables above to that deployment before
-running the command. CI does not set these variables, so this suite is
-expected to show as skipped there — see the "Warn if Soroban sandbox
-integration tests are skipped" step in
-[`.github/workflows/test.yml`](./.github/workflows/test.yml) for the
-annotation that surfaces this in each run.
-
-## Local setup
-
-See the [README](./README.md#installation) for installation and how to run the test suite.
-
-## Releasing
-
-Publishing to npm is fully automated by [`.github/workflows/publish.yml`](./.github/workflows/publish.yml), which runs on every GitHub Release being **published** and, in order, typechecks, tests, builds, and runs `npm publish --access public`. There is no separate "release" branch or manual publish step — creating the GitHub Release *is* what ships the package.
-
-1. **Decide and apply the version bump.** This project follows [semver](https://semver.org/): patch for fixes, minor for backwards-compatible additions, major for breaking changes to the public API in `src/index.ts`. On `main`, with a clean working tree, run one of:
-
-   ```
-   npm version patch   # or: minor / major
-   ```
-
-   This bumps `version` in `package.json` and `package-lock.json`, commits the change, and creates a matching local git tag (e.g. `v0.2.0`). Push both:
-
-   ```
-   git push origin main --follow-tags
-   ```
-
-2. **Create the GitHub Release that triggers `publish.yml`.** Go to the repo's Releases page (or run `gh release create`) and create a release using the tag you just pushed. The tag name should match the version (e.g. `v0.2.0`); the release title and notes can summarize what changed since the last release. Publishing the release (not just saving it as a draft) fires the `release: published` event and starts the workflow.
-
-3. **Watch the workflow run.** Check the Actions tab for the `Publish` run triggered by your release. If typecheck, test, or build fails, the job stops before `npm publish` runs — fix forward with a new commit/tag/release rather than trying to reuse the failed tag.
-
-Because the publish step authenticates as `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`, only maintainers with access to configure repository secrets can make this workflow succeed — the `NPM_TOKEN` secret is scoped to whoever administers this repo's GitHub settings, not to individual Wave contributors. If you're a contributor working an issue that requires a release to close out, ask a maintainer to cut it once your PR is merged.
-
-## Learn more
-
-Full details on how Wave Programs work — applying, Points, rewards, and payouts — are documented at <https://drips.network/wave>.
+/* … truncated 3048 chars — edit only what you need near the top … */

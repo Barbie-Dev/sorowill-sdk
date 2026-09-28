@@ -56,11 +56,11 @@ export interface HookRegistry {
  * ```ts
  * const hooks = new HookManager();
  *
- * hooks.beforeInvoke((ctx) => {
+ * hooks.onBeforeInvoke((ctx) => {
  *   console.log(`Calling ${ctx.method}`, ctx.args);
  * });
  *
- * hooks.afterInvoke((ctx) => {
+ * hooks.onAfterInvoke((ctx) => {
  *   console.log(`${ctx.method} completed in ${ctx.durationMs}ms`);
  * });
  *

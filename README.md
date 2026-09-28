@@ -8,6 +8,28 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
+## Requirements
+
+- **Node.js 22+** (see `engines` in `package.json`) or a modern browser.
+- **A Stellar wallet for any state-changing call.** Read-only methods work without a wallet, but every method that signs and submits a transaction (creating a will, checking in, claiming, etc.) needs a connected, compatible wallet. The default and most common setups are:
+  - **[Freighter](https://www.freighter.app/)** browser extension — the default `freighterAdapter`. Install it from [freighter.app](https://www.freighter.app/) and install the optional peer `@stellar/freighter-api`.
+  - **WalletConnect-compatible mobile wallets** (e.g. [LOBSTR](https://lobstr.co/)) via `WalletConnectAdapter` — requires a WalletConnect project ID from [WalletConnect Cloud](https://cloud.walletconnect.com/). See [Pairing LOBSTR](#pairing-lobstr).
+  - Other supported adapters: Albedo (`createAlbedoAdapter()`), Ledger (`@ledgerhq/hw-app-str`, see [Connecting Ledger](#connecting-ledger)), Hana, HOT, and any injected wallet. See [Pluggable wallets](#pluggable-wallets).
+  - Scripts, CI, and servers without a browser wallet can use `KeypairSigner` — see [Scripts, automation, and testing](#scripts-automation-and-testing-keypairsigner).
+- **A funded account on the target network** (use [Friendbot](https://developers.stellar.org/docs/learn/fundamentals/networks#friendbot) on testnet), with the wallet switched to the same network as the client.
+
+### Troubleshooting wallet connection
+
+| Symptom | Likely cause and fix |
+|---|---|
+| `isFreighterInstalled()` returns `false` | The Freighter extension is not installed or not enabled for this site. Install it from [freighter.app](https://www.freighter.app/) and reload the page. |
+| `Cannot find module '@stellar/freighter-api'` | The optional peer is missing. Run `npm install @stellar/freighter-api`, or pass a different wallet adapter. |
+| Wallet network mismatch error | The wallet is on a different network (e.g. Mainnet vs Testnet). Switch the network in the wallet to match the client's `networkPassphrase`. |
+| Connection prompt never appears | The user dismissed or blocked the popup, or the page is not served over `https`/`localhost`. Retry `connectWallet()` from a user gesture (click handler). |
+| WalletConnect pairing hangs | Invalid/missing WalletConnect project ID, or the mobile wallet is not on the same network. Re-check the project ID and re-scan the QR code. |
+| `Account not found` when submitting | The wallet's account is not funded on this network. Fund it (Friendbot on testnet) and retry. |
+| Nothing works in Node.js | Browser wallets are unavailable outside a browser. Use `KeypairSigner` for scripts and tests. |
+
 ## Installation
 
 ```bash
@@ -230,6 +252,32 @@ The DebugLogger is designed with a **no-secrets-logged guarantee**: it never log
 
 This makes it safe to forward debug logs to your own internal logging pipeline (e.g., a logging service, analytics tool, or error tracker) without worrying about leaking credentials.
 
+### Stack traces and error reports
+
+When `debug: true`, `error` log entries include the error's `stack` so you can pinpoint where a failure occurred. Stacks are omitted when debug logging is off.
+
+To collect details for a support request, use `client.reportError(err)`. It returns a JSON-serializable object with the error's name, message, code, stack, cause, contract ID, and network passphrase:
+
+```ts
+try {
+  await client.checkIn(willId);
+} catch (err) {
+  console.error(JSON.stringify(client.reportError(err), null, 2));
+}
+```
+
+## Fees and Soroban resource costs
+
+`getNetworkFeeStats()` only reports network *inclusion* fees. Soroban calls also pay a resource fee (CPU, memory, ledger I/O, storage rent) that varies per operation — a `merge_wills` with many beneficiaries costs much more than a `check_in`. Use `previewFee(method, args)` to simulate the real cost; it returns `{ resourceFee, totalFee }`. All state-changing SDK calls simulate via `prepareTransaction` before submitting, so the submitted fee always includes the simulated resource fee. See Stellar's [fees, resource limits, and metering](https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering) docs.
+
+## Pagination order
+
+`getWillsByOwner` and `getWillsByBeneficiary` always return wills sorted ascending by `will_id` (the SDK sorts client-side because the contract does not guarantee order), so pagination cursors are stable across calls.
+
+## Public vs internal types
+
+Only symbols exported from the package entry point are part of the stable API. Internal types such as Soroban's `xdr.ScVal` are not re-exported; import them from `@stellar/stellar-sdk` if needed.
+
 ## Typed errors
 
 Contract failures are exposed as subclasses of `WillContractError`, including
@@ -345,6 +393,10 @@ For applications that need custom signing logic (e.g. multi-sig, custom key deri
 | Export | Kind | Source module | Description |
 |---|---|---|---|
 | `ReadCache` | class | `cache` | In-memory read cache with optional TTL and persistence |
+| `MemoryCachePersistenceAdapter` | class | `cache` | Persistence adapter backed by an in-memory map |
+| `LocalStorageCachePersistenceAdapter` | class | `cache` | Persistence adapter backed by `window.localStorage` |
+| `IndexedDbCachePersistenceAdapter` | class | `cache` | Persistence adapter backed by IndexedDB |
+| `createReadCacheKey` | function | `cache` | Builds a stable cache key from a method name and its arguments |
 
 ### Hooks
 
@@ -353,6 +405,43 @@ For applications that need custom signing logic (e.g. multi-sig, custom key deri
 | `HookManager` | class | `hooks` | Registers and runs `beforeInvoke` / `afterInvoke` lifecycle hooks |
 
 ### Multisig
+
+Wills can be owned by a Stellar multi-signature account. The built-in wallet adapters sign with a single key, so when the owner account's thresholds require more than one signer, collect signatures out-of-band and submit the fully signed envelope:
+
+```ts
+import {
+  MultisigCollector,
+  buildMultisigTransactionXdr,
+  signWithSecretKey,
+} from '@sorowill/sdk';
+
+// 1. Build the unsigned transaction with the multi-sig account as source.
+const txXdr = await buildMultisigTransactionXdr({
+  rpcUrl,
+  networkPassphrase,
+  contractAddress,
+  method: 'check_in',
+  args: { will_id: 1n },
+  sourceAccount: multisigAccountPublicKey,
+});
+
+// 2. Collect a signature from each co-signer (wallet, hardware device, or script).
+const collector = new MultisigCollector({ transactionXdr: txXdr, networkPassphrase, threshold: 2 });
+collector.addSignature(signerA, signWithSecretKey(txXdr, signerASecret, networkPassphrase));
+collector.addSignature(signerB, signatureFromSignerB);
+
+// 3. Once the threshold is met, submit the signed envelope.
+if (collector.isReady) {
+  await client.submitSignedTransaction(collector.build().toXDR());
+}
+```
+
+Notes:
+
+- Every co-signer must sign the **same** transaction XDR; signing a rebuilt transaction (different sequence number or fee) produces signatures that will not verify.
+- Set `threshold` to the account's threshold for the operation (medium threshold for contract invocations), not the number of signers.
+- Collect signatures before the transaction's time bound expires; otherwise rebuild and re-collect.
+- `signWithSecretKey` is for scripts and testing only — never handle raw secret keys in a browser.
 
 | Export | Kind | Source module | Description |
 |---|---|---|---|
@@ -400,6 +489,8 @@ For applications that need custom signing logic (e.g. multi-sig, custom key deri
 |---|---|---|---|
 | `RequestQueue` | class | `requestQueue` | FIFO queue with concurrency and rate-limit controls used internally by the client |
 
+**Ordering guarantees.** State-changing calls (`createWill`, `checkIn`, `batch`, and other signed submissions) made on the same client are serialized per account: each one loads the sequence number, signs, submits, and waits for a terminal status — including any RPC retries and fee-bump resubmission — before the next begins. A retried operation therefore can never land after an operation issued later. Read-only RPC calls go through `RequestQueue` concurrently and carry no ordering guarantee across retries. Multiple `SoroWillClient` instances (or other apps) signing for the same account are not coordinated with each other; use a single client per account.
+
 ### Events
 
 | Export | Kind | Source module | Description |
@@ -428,7 +519,16 @@ For applications that need custom signing logic (e.g. multi-sig, custom key deri
 | `WalletNetworkMismatchError` | class | `errors` | The wallet's active network does not match the client's configured network |
 | `FreighterInstallCheckError` | class | `errors` | An unexpected error occurred while checking whether Freighter is installed |
 | `SoroWillRestoreRequiredError` | class | `errors` | The contract entry needs a ledger restore before it can be invoked |
+| `InvalidPaginationOptionsError` | class | `errors` | The supplied pagination options are invalid |
+| `InvalidDayCountError` | class | `errors` | The supplied day count is invalid |
 | `mapContractError` | function | `errors` | Maps a raw Soroban error into the appropriate typed subclass |
+
+### RPC
+
+| Export | Kind | Source module | Description |
+|---|---|---|---|
+| `RpcEndpointPool` | class | `rpc` | Fails over between multiple configured RPC endpoints on retryable connection errors |
+| `isRetryableRpcConnectionError` | function | `rpc` | Determines whether an error from an RPC call is a retryable connection error |
 
 ### Types
 
@@ -469,7 +569,7 @@ For applications that need custom signing logic (e.g. multi-sig, custom key deri
 | `HookRegistry` | interface | `hooks` | `on`/`off` registration shape for hooks |
 | `CollectedSignature` | interface | `multisig` | A partial signature collected by `MultisigCollector` |
 | `MultisigCollectorOptions` | interface | `multisig` | Options for constructing a `MultisigCollector` |
-| `FeeBumpOptions` | interface | `feeBump` | Options for `buildFeeBumpXdr` |
+| `FeeBumpOptions` | interface | `feeBump` | Options for `buildFeeBumpXdr` (`fee` defaults to the inner transaction fee) |
 | `SubmitFeeBumpOptions` | interface | `feeBump` | Options for `submitFeeBump` |
 | `BuildSep7TxUriOptions` | interface | `sep7` | Options for `buildSep7TxUri` |
 | `Sep7CallbackResult` | interface | `sep7` | Parsed result of a SEP-7 callback URL |
@@ -633,12 +733,14 @@ interface WalletConnection {
 If no `wallet` is passed, the client defaults to `freighterAdapter`, so existing code keeps working unchanged. To use [Albedo](https://albedo.link) instead, pass the bundled adapter:
 
 ```ts
+import { Networks } from '@stellar/stellar-sdk';
 import { SoroWillClient, createAlbedoAdapter } from '@sorowill/sdk';
 
 const client = new SoroWillClient({
   network: 'testnet',
   contractId: 'C...',
-  wallet: createAlbedoAdapter(),
+  // Defaults to the public network when no passphrase is given.
+  wallet: createAlbedoAdapter({ networkPassphrase: Networks.TESTNET }),
 });
 ```
 
@@ -741,12 +843,25 @@ These tradeoffs and their planned mitigations are tracked in the issue tracker (
 ```bash
 git clone https://github.com/SoroWill/sorowill-sdk.git
 cd sorowill-sdk
-npm install
+npm ci
 npm run typecheck
 npm test
 npm run build
 ```
 
+### Dependency lock file
+
+`package-lock.json` is committed and is the source of truth for every direct and transitive dependency version. CI installs with `npm ci` and fails if the lock file is out of sync with `package.json`.
+
+- Use `npm ci` for a clean, reproducible install.
+- When you add, remove, or upgrade a dependency, run `npm install` and commit the updated `package-lock.json` together with `package.json`.
+- Do not use yarn or pnpm in this repo, and do not delete the lock file to "fix" install errors.
+
 ## Contributing via Drips Wave
 
 This repo participates in the **Stellar Wave Program** on [Drips](https://drips.network/wave). Maintainer-tagged issues carry Point values, and contributors who resolve them during an active Wave earn a proportional share of that Wave's reward pool. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the contribution workflow, and <https://drips.network/wave> for how Wave itself works.
+
+## Handsoff notes
+
+<!-- handsoff-issue-416 -->
+- #416: getNetworkFeeStats calls RPC.getFeeStats() once and caches the result indefinitely, so fee estimates become stale across multiple calls in a long-running app

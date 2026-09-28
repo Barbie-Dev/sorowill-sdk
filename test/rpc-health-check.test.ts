@@ -4,7 +4,7 @@ import { SoroWillClient } from '../src/index';
 describe('RPC health check (issue #186)', () => {
   it('isHealthy() returns true when server is healthy', async () => {
     const mockServer = {
-      getHealth: vi.fn().mockResolvedValue({ ok: true }),
+      getHealth: vi.fn().mockResolvedValue({ status: 'healthy' }),
       simulateTransaction: vi.fn(),
       getAccount: vi.fn(),
       prepareTransaction: vi.fn(),
@@ -96,7 +96,7 @@ describe('RPC health check (issue #186)', () => {
     expect(result).toBe(false);
   });
 
-  it('isHealthy() returns true when server does not have getHealth method', async () => {
+  it('isHealthy() returns false when server does not have getHealth method', async () => {
     const mockServer = {
       // No getHealth method - custom server implementation
       simulateTransaction: vi.fn(),
@@ -115,7 +115,7 @@ describe('RPC health check (issue #186)', () => {
 
     const result = await client.isHealthy();
 
-    // When getHealth is not available, we assume the server is healthy
-    expect(result).toBe(true);
+    // When getHealth is not available, the server is not reported as healthy
+    expect(result).toBe(false);
   });
 });

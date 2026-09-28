@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { waitFor } from '@testing-library/dom';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
@@ -133,6 +134,15 @@ describe('useWill', () => {
     unmount();
     expect(client.destroy).toHaveBeenCalledTimes(1);
   });
+
+  it('works under StrictMode double-invoked effects', async () => {
+    const { result } = renderHook(() => useWill(CLIENT_OPTIONS, '1'), {
+      wrapper: StrictMode,
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.data?.id).toBe('1');
+    expect(result.current.error).toBeNull();
+  });
 });
 
 describe('useWillsByOwner', () => {
@@ -159,6 +169,15 @@ describe('useWillsByOwner', () => {
     expect(result.current.data).toBeNull();
     expect(result.current.loading).toBe(false);
   });
+
+  it('works under StrictMode double-invoked effects', async () => {
+    const { result } = renderHook(() => useWillsByOwner(CLIENT_OPTIONS, 'GOWNER'), {
+      wrapper: StrictMode,
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.data).toHaveLength(1);
+    expect(result.current.error).toBeNull();
+  });
 });
 
 describe('useWillsByBeneficiary', () => {
@@ -184,5 +203,14 @@ describe('useWillsByBeneficiary', () => {
     const { result } = renderHook(() => useWillsByBeneficiary(CLIENT_OPTIONS, null));
     expect(result.current.data).toBeNull();
     expect(result.current.loading).toBe(false);
+  });
+
+  it('works under StrictMode double-invoked effects', async () => {
+    const { result } = renderHook(() => useWillsByBeneficiary(CLIENT_OPTIONS, 'GBEN'), {
+      wrapper: StrictMode,
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.data).toHaveLength(1);
+    expect(result.current.error).toBeNull();
   });
 });

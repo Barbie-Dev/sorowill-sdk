@@ -3,6 +3,7 @@ import {
   BASE_FEE,
   Contract,
   Networks,
+  StrKey,
   Transaction,
   TransactionBuilder,
   rpc,
@@ -42,6 +43,7 @@ import {
 import {
   AccountNotFundedError,
   BeneficiaryValidationError,
+  GuardianValidationError,
   InvalidDayCountError,
   InvalidContractIdError,
   InvalidCursorError,
@@ -49,6 +51,7 @@ import {
   InvokeFailedError,
   RequestTimeoutError,
   mapContractError,
+  RequestTimeoutError,
   SimulationError,
   SoroWillError,
   SoroWillInvalidAmountError,
@@ -58,7 +61,7 @@ import {
   WalletNetworkMismatchError,
   WebSocketNotConfiguredError,
 } from './errors';
-import { MAX_GUARDIANS, validateBeneficiaries } from './utils';
+import { hasDuplicateBeneficiaries, MAX_GUARDIANS, validateBeneficiaries } from './utils';
 import { RequestQueue } from './requestQueue';
 import { InFlightTracker } from './inFlightTracker';
 import { RpcEndpointPool } from './rpc';
@@ -68,6 +71,7 @@ import type { BeforeInvokeContext, AfterInvokeContext } from './hooks';
 import { assertPreparedTransactionMatchesIntendedOperation } from './txValidation';
 import { DebugLogger } from './debugLogger';
 
+/** @internal Local alias for Soroban's `xdr.ScVal`; not part of the public API. */
 type ScVal = xdr.ScVal;
 
 const { Spec } = stellarContract;
@@ -134,8 +138,10 @@ export interface SoroWillRpcServer {
     options: { attempts: number },
   ): Promise<rpc.Api.GetTransactionResponse>;
   getFeeStats?(): Promise<rpc.Api.GetFeeStatsResponse>;
+  getHealth?(): Promise<rpc.Api.GetHealthResponse>;
 }
 
+/** @internal */
 interface ContractSpecLike {
   funcArgsToScVals(method: string, args: Record<string, unknown>): ScVal[];
   funcResToNative(method: string, value: ScVal): unknown;
@@ -392,13 +398,20 @@ function mapWill(raw: unknown): Will {
 }
 
 /**
- * Shallow-clones a `Will`, including its `beneficiaries`/`guardians` arrays.
- * Read-cache hits return the exact cached object, so a caller mutating the
- * arrays on a returned `Will` would otherwise corrupt the cache for every
- * subsequent read of the same will (#187).
+ * Deep-clones a `Will`, including its `beneficiaries`/`guardians` arrays and
+ * the `lastCheckin`/`triggerTime` `Date` fields. Read-cache hits return the
+ * exact cached object, so a caller mutating a returned `Will` (including
+ * calling `setTime` on a `Date` field) would otherwise corrupt the cache for
+ * every subsequent read of the same will (#187, #399).
  */
 function cloneWill(will: Will): Will {
-  return { ...will, beneficiaries: [...will.beneficiaries], guardians: [...will.guardians] };
+  return {
+    ...will,
+    beneficiaries: will.beneficiaries.map((beneficiary) => ({ ...beneficiary })),
+    guardians: [...will.guardians],
+    lastCheckin: new Date(will.lastCheckin.getTime()),
+    triggerTime: will.triggerTime === null ? null : new Date(will.triggerTime.getTime()),
+  };
 }
 
 function mapWillList(raw: unknown): Will[] {
@@ -408,7 +421,21 @@ function mapWillList(raw: unknown): Will[] {
         'This usually means the deployed contract spec and this SDK version have drifted apart.',
     );
   }
-  return raw.map(mapWill);
+  return sortWillsById(raw.map(mapWill));
+}
+
+/**
+ * Sorts wills ascending by numeric `will_id`. The contract does not guarantee
+ * list order, so the SDK enforces it client-side: pagination cursors are
+ * indexes into this sorted list, which keeps pages stable across calls
+ * (no duplicates or skips as long as the underlying set is unchanged).
+ */
+function sortWillsById(wills: Will[]): Will[] {
+  return wills.sort((a, b) => {
+    const x = BigInt(a.id);
+    const y = BigInt(b.id);
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
 }
 
 // === Beneficiary scale conversion
@@ -602,6 +629,8 @@ export class SoroWillClient {
   private readonly webSocketFactory: ((url: string) => WebSocketLike) | undefined;
   private readonly fetchImpl: FetchImplementation;
   private readonly queue: RequestQueue;
+  /** Tail of the per-account write chain; see {@link SoroWillClient.serializeWrite}. */
+  private writeChain: Promise<unknown> = Promise.resolve();
   private readonly inFlightTracker: InFlightTracker;
   private readonly timeoutMs: number;
   private readonly readCache: ReadCache | undefined;
@@ -833,6 +862,9 @@ export class SoroWillClient {
     params: CreateWillParams,
     options?: RequestOptions,
   ): Promise<{ willId: string; txHash: string }> {
+    if (hasDuplicateBeneficiaries(params.beneficiaries)) {
+      throw new BeneficiaryValidationError('Invalid beneficiaries: duplicate beneficiary addresses are not allowed.');
+    }
     if (!validateBeneficiaries(params.beneficiaries)) {
       throw new BeneficiaryValidationError(
         'Invalid beneficiaries: list must be 1–10 entries, every percentage must be a positive integer, and percentages must sum to exactly 100.',
@@ -842,7 +874,23 @@ export class SoroWillClient {
     if (params.guardians.length > MAX_GUARDIANS) {
       throw new TooManyGuardiansError(params.guardians.length, MAX_GUARDIANS);
     }
+    if (!StrKey.isValidContract(params.token)) {
+      throw new InvalidContractIdError(params.token);
+    }
     const owner = await this.getWalletPublicKey();
+    const seenGuardians = new Set<string>();
+    for (const guardian of params.guardians) {
+      if (!StrKey.isValidEd25519PublicKey(guardian)) {
+        throw new GuardianValidationError('invalid_address', guardian);
+      }
+      if (seenGuardians.has(guardian)) {
+        throw new GuardianValidationError('duplicate', guardian);
+      }
+      if (guardian === owner) {
+        throw new GuardianValidationError('owner_is_guardian', guardian);
+      }
+      seenGuardians.add(guardian);
+    }
     const { txHash, returnValue } = await this.invoke(
       'create_will',
       {
@@ -982,6 +1030,9 @@ export class SoroWillClient {
     options?: RequestOptions,
   ): Promise<{ txHash: string }> {
     parseWillId(params.willId);
+    if (hasDuplicateBeneficiaries(params.beneficiaries)) {
+      throw new BeneficiaryValidationError('Invalid beneficiaries: duplicate beneficiary addresses are not allowed.');
+    }
     if (!validateBeneficiaries(params.beneficiaries)) {
       throw new BeneficiaryValidationError(
         'Invalid beneficiaries: list must be 1–10 entries, every percentage must be a positive integer, and percentages must sum to exactly 100.',
@@ -1061,20 +1112,24 @@ export class SoroWillClient {
    * Useful for showing a 'network unavailable' banner before attempting a real call.
    * Never throws — network failures resolve to `false` rather than propagating an exception.
    *
-   * @returns `true` if the RPC server is healthy and responding, `false` otherwise.
+   * The call goes through the request queue with the client's timeout and RPC failover.
+   * A server that does not implement `getHealth` is reported as not healthy (`false`).
+   *
+   * @returns `true` only if the RPC server reports `status: 'healthy'`, `false` otherwise.
    */
-  async isHealthy(): Promise<boolean> {
+  async isHealthy(options?: RequestOptions): Promise<boolean> {
     try {
-      // The underlying rpc.Server has a getHealth() method that calls the server's
-      // JSON-RPC getHealth endpoint. We cast to any because our SoroWillRpcServer
-      // interface doesn't include it, but it's available on rpc.Server instances.
-      const server = this.server as unknown as { getHealth(): Promise<unknown> };
-      if (typeof server.getHealth === 'function') {
-        await server.getHealth();
-        return true;
-      }
-      // If getHealth is not available (e.g., custom server implementation), assume healthy
-      return true;
+      const response = await this.rpc(
+        () =>
+          this.rpcPool.withFailover((server) => {
+            if (typeof server.getHealth !== 'function') {
+              throw new SoroWillError('The configured RPC server does not support getHealth');
+            }
+            return server.getHealth();
+          }),
+        options,
+      );
+      return response?.status === 'healthy';
     } catch {
       // Network failures, timeouts, or any other errors mean the server is not healthy
       return false;
@@ -1099,7 +1154,8 @@ export class SoroWillClient {
   }
 
   async getWill(willId: string, options?: RequestOptions): Promise<Will> {
-    const cacheKey = createReadCacheKey('get_will', { willId });
+    const canonicalWillId = parseWillId(willId).toString();
+    const cacheKey = createReadCacheKey('get_will', { willId: canonicalWillId });
     if (this.readCache) {
       await this.readCache.ready();
       const cached = this.readCache.get<Will>(cacheKey);
@@ -1107,9 +1163,9 @@ export class SoroWillClient {
         return cloneWill(cached);
       }
     }
-    const raw = await this.read<unknown>('get_will', { will_id: parseWillId(willId) }, options);
+    const raw = await this.read<unknown>('get_will', { will_id: BigInt(canonicalWillId) }, options);
     const will = mapWill(raw);
-    this.readCache?.set(cacheKey, cloneWill(will), [willId]);
+    this.readCache?.set(cacheKey, cloneWill(will), [canonicalWillId]);
     return will;
   }
 
@@ -1175,6 +1231,9 @@ export class SoroWillClient {
    * wills. Returns the plain list unchanged when neither `pageSize` nor
    * `cursor` is present on `options`, so callers who don't ask for
    * pagination keep getting a plain `Will[]`.
+   *
+   * Sort order guarantee: wills are always returned sorted ascending by
+   * `will_id`, so cursors are consistent across calls.
    */
   private paginate(
     wills: Will[],
@@ -1293,43 +1352,45 @@ export class SoroWillClient {
     let txHash: string | null = null;
     let error: string | null = null;
     try {
-      const spec = await this.getSpec(options);
-      const contractOperations = operations.map(({ method, args }) =>
-        this.contract.call(method, ...spec.funcArgsToScVals(method, args)),
-      );
+      return await this.serializeWrite(async () => {
+        const spec = await this.getSpec(options);
+        const contractOperations = operations.map(({ method, args }) =>
+          this.contract.call(method, ...spec.funcArgsToScVals(method, args)),
+        );
 
-      const publicKey = await this.getWalletPublicKey();
-      const account = await this.rpc(
-        () => this.rpcPool.withFailover((server) => server.getAccount(publicKey)),
-        options,
-      );
-      const builder = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
+        const publicKey = await this.getWalletPublicKey();
+        const account = await this.rpc(
+          () => this.rpcPool.withFailover((server) => server.getAccount(publicKey)),
+          options,
+        );
+        const builder = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        });
+        for (const op of contractOperations) {
+          builder.addOperation(op);
+        }
+        const builtTx = builder.setTimeout(this.transactionTimeoutSeconds).build();
+
+        const prepared = await this.rpc(
+          () => this.rpcPool.withFailover((server) => server.prepareTransaction(builtTx)),
+          options,
+        );
+
+        assertPreparedTransactionMatchesIntendedOperation({
+          intendedTransactionXdr: builtTx.toXDR(),
+          preparedTransactionXdr: prepared.toXDR(),
+          networkPassphrase: this.networkPassphrase,
+          context: 'batch',
+        });
+
+        const signedTxXdr = await this.wallet.signTransaction(prepared.toXDR(), {
+          networkPassphrase: this.networkPassphrase,
+        });
+        const result = await this.submitSignedTransaction(signedTxXdr, options);
+        txHash = result.txHash;
+        return { txHash: result.txHash, createdAt: result.createdAt };
       });
-      for (const op of contractOperations) {
-        builder.addOperation(op);
-      }
-      const builtTx = builder.setTimeout(this.transactionTimeoutSeconds).build();
-
-      const prepared = await this.rpc(
-        () => this.rpcPool.withFailover((server) => server.prepareTransaction(builtTx)),
-        options,
-      );
-
-      assertPreparedTransactionMatchesIntendedOperation({
-        intendedTransactionXdr: builtTx.toXDR(),
-        preparedTransactionXdr: prepared.toXDR(),
-        networkPassphrase: this.networkPassphrase,
-        context: 'batch',
-      });
-
-      const signedTxXdr = await this.wallet.signTransaction(prepared.toXDR(), {
-        networkPassphrase: this.networkPassphrase,
-      });
-      const result = await this.submitSignedTransaction(signedTxXdr, options);
-      txHash = result.txHash;
-      return { txHash: result.txHash, createdAt: result.createdAt };
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       throw err;
@@ -1378,12 +1439,18 @@ export class SoroWillClient {
    * Simulates `method` with `args` and returns the Soroban resource fee the
    * network would charge, without signing or submitting anything. Useful for
    * showing a fee estimate in a UI before the user commits to a transaction.
+   *
+   * `resourceFee` is the operation-specific Soroban resource cost (CPU, RAM,
+   * ledger I/O, storage). `totalFee` adds the base inclusion fee, giving the
+   * minimum total fee the network will accept for this call.
+   *
+   * @see https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering
    */
   async previewFee(
     method: string,
     args: Record<string, unknown>,
     options?: RequestOptions,
-  ): Promise<{ resourceFee: string }> {
+  ): Promise<{ resourceFee: string; totalFee: string }> {
     try {
       const spec = await this.getSpec(options);
       const scArgs = spec.funcArgsToScVals(method, args);
@@ -1398,7 +1465,10 @@ export class SoroWillClient {
       if (rpc.Api.isSimulationError(simulation)) {
         throw new SimulationError(method, simulation.error);
       }
-      return { resourceFee: simulation.minResourceFee };
+      return {
+        resourceFee: simulation.minResourceFee,
+        totalFee: (BigInt(BASE_FEE) + BigInt(simulation.minResourceFee)).toString(),
+      };
     } catch (error) {
       throw mapContractError(error);
     }
@@ -1565,9 +1635,12 @@ export class SoroWillClient {
 
     const poll = async (): Promise<void> => {
       if (closed) return;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
         const response = await this.fetchImpl(this.eventRpcUrl, {
           method: 'POST',
+          signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             jsonrpc: '2.0',
@@ -1579,19 +1652,42 @@ export class SoroWillClient {
             },
           }),
         });
+        if (!response.ok) {
+          throw new SoroWillError(`getEvents poll failed with HTTP status ${response.status}`);
+        }
         const payload = (await response.json()) as {
           result?: { events?: RawEventRecord[]; nextCursor?: string };
+          error?: { code?: number; message?: string };
         };
+        if (payload.error) {
+          throw new SoroWillError(
+            `getEvents poll failed with JSON-RPC error ${payload.error.code}: ${payload.error.message ?? 'unknown error'}`,
+          );
+        }
         for (const raw of payload.result?.events ?? []) {
           if (closed) break;
-          listener(mapEventRecord(raw, this.getContractId()));
+          // Isolate listener failures per event so a throwing listener neither stalls
+          // cursor progress nor causes the same events to be redelivered.
+          try {
+            listener(mapEventRecord(raw, this.getContractId()));
+          } catch (listenerError) {
+            const eventId = raw.id ?? raw.pagingToken ?? 'unknown';
+            options.onError?.(
+              new SoroWillError(`Event listener threw for event ${eventId}`, { cause: listenerError }),
+            );
+          }
         }
         if (payload.result?.nextCursor !== undefined) {
           cursor = payload.result.nextCursor;
         }
       } catch (err) {
-        options.onError?.(err instanceof Error ? err : new Error(String(err)));
+        if (controller.signal.aborted) {
+          options.onError?.(new RequestTimeoutError(this.timeoutMs));
+        } else {
+          options.onError?.(err instanceof Error ? err : new Error(String(err)));
+        }
       } finally {
+        clearTimeout(timeout);
         if (!closed) {
           timer = setTimeout(() => void poll(), pollIntervalMs);
         }
@@ -1809,8 +1905,35 @@ export class SoroWillClient {
         }>;
   }
 
+  /**
+   * Runs state-changing submissions for this client's account strictly one at a
+   * time, in call order. Each write loads the account sequence number, signs,
+   * submits, and waits for a terminal status (including any RPC retries or
+   * fee-bump resubmission) before the next write starts, so a retried operation
+   * can never land after an operation that was issued later.
+   */
+  private serializeWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.writeChain.then(operation, operation);
+    this.writeChain = result.catch(() => undefined);
+    return result;
+  }
+
+  /** Builds, signs, submits, and polls a set of operations as one transaction, serialized per account. */
+  private submit(
+    operations: readonly xdr.Operation[],
+    label: string,
+    options?: RequestOptions,
+  ): Promise<{
+    txHash: string;
+    createdAt: number;
+    returnValue: ScVal | undefined;
+    events?: Array<{ topics: string[]; data: unknown }>;
+  }> {
+    return this.serializeWrite(() => this.submitUnserialized(operations, label, options));
+  }
+
   /** Builds, signs, submits, and polls a set of operations as one transaction. */
-  private async submit(
+  private async submitUnserialized(
     operations: readonly xdr.Operation[],
     label: string,
     options?: RequestOptions,
@@ -1837,8 +1960,9 @@ export class SoroWillClient {
         // does not exist on the network, rather than leaking the raw RPC error.
         throw new AccountNotFundedError(publicKey, { cause: getAccountError });
       }
+      const baseFee = BigInt(BASE_FEE) * BigInt(operations.length);
       const builder = new TransactionBuilder(account, {
-        fee: (BigInt(BASE_FEE) * BigInt(operations.length)).toString(),
+        fee: baseFee.toString(),
         networkPassphrase: this.networkPassphrase,
       });
       for (const operation of operations) builder.addOperation(operation);
@@ -1908,8 +2032,12 @@ export class SoroWillClient {
         if (this.autoFeeBumpOnTimeout) {
           this.debugLogger.logPoll(label);
 
-          const feeBumpFee = (BigInt(BASE_FEE) * BigInt(operations.length) * BigInt(2)).toString();
-          const feeBumpBuilder = new TransactionBuilder(account, {
+          const feeBumpFee = (await this.computeBumpedFee(baseFee, options)).toString();
+          // Building the first transaction incremented `account`'s sequence number, so rebuild
+          // from a fresh Account one below the pending transaction's sequence: the resubmission
+          // then reuses that sequence and replaces the pending transaction instead of following it.
+          const retrySource = new Account(publicKey, (BigInt(builtTx.sequence) - 1n).toString());
+          const feeBumpBuilder = new TransactionBuilder(retrySource, {
             fee: feeBumpFee,
             networkPassphrase: this.networkPassphrase,
           });
@@ -2079,6 +2207,27 @@ export class SoroWillClient {
     };
   }
 
+  /**
+   * Builds a JSON-serializable error report (name, message, code, stack,
+   * cause, SDK context) that users can attach to a support request.
+   * Stack traces are always included here since the caller explicitly asks
+   * for the report; routine logging only includes stacks when `debug` is on.
+   */
+  reportError(error: unknown): Record<string, unknown> {
+    const err = error instanceof Error ? error : new Error(String(error));
+    const cause = (err as { cause?: unknown }).cause;
+    return {
+      timestamp: new Date().toISOString(),
+      name: err.name,
+      message: err.message,
+      code: (err as { code?: unknown }).code,
+      stack: err.stack,
+      cause: cause instanceof Error ? { name: cause.name, message: cause.message, stack: cause.stack } : cause,
+      contractId: this.contract.contractId(),
+      networkPassphrase: this.networkPassphrase,
+    };
+  }
+
   async refreshSpec(options?: RequestOptions): Promise<InstanceType<typeof Spec>> {
     this.specPromise = undefined;
     return this.getSpec(options);
@@ -2086,6 +2235,17 @@ export class SoroWillClient {
 
   /**
    * Returns network-wide inclusion-fee statistics (`rpc.Api.GetFeeStatsResponse`).
+   *
+   * **Note:** these stats cover only the *inclusion* fee. Soroban invocations
+   * also pay a resource fee (CPU instructions, memory, ledger reads/writes,
+   * storage rent) that depends on the specific operation — e.g. `merge_wills`
+   * with many beneficiaries costs far more than `check_in`. Do not size a
+   * transaction fee from these stats alone; use {@link previewFee} to simulate
+   * the actual cost. State-changing SDK calls always simulate via
+   * `prepareTransaction` before submission, so the submitted fee already
+   * includes the simulated resource fee.
+   *
+   * @see https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering
    *
    * @throws {SoroWillError} If the configured RPC server does not support `getFeeStats`.
    */
@@ -2097,23 +2257,45 @@ export class SoroWillClient {
     return this.rpc(() => server.getFeeStats!(), options);
   }
 
+  /**
+   * Verifies the wallet is on the expected network before signing.
+   *
+   * - Wallets that do not implement `getNetwork` are not checked (explicit opt-out).
+   * - If `getNetwork` rejects, a {@link SoroWillError} is thrown with the original error as `cause`.
+   * - An empty or missing passphrase cannot be verified and is treated as a mismatch
+   *   ({@link WalletNetworkMismatchError} with an empty `actualNetworkPassphrase`).
+   */
+  /**
+   * Inclusion fee for a replacement transaction: the network's p90 Soroban inclusion
+   * fee (from fee stats) per operation, but never below the 10x multiplier stellar-core
+   * requires to replace a pending transaction with the same sequence number.
+   */
+  private async computeBumpedFee(originalFee: bigint, options?: RequestOptions): Promise<bigint> {
+    const minimum = originalFee * 10n;
+    try {
+      const stats = await this.getNetworkFeeStats(options);
+      const p90 = BigInt(stats.sorobanInclusionFee.p90);
+      const fromStats = p90 * BigInt(originalFee / BigInt(BASE_FEE) || 1n);
+      return fromStats > minimum ? fromStats : minimum;
+    } catch {
+      return minimum;
+    }
+  }
+
   async assertWalletNetwork(network: { networkPassphrase: string }): Promise<void> {
     if (!this.wallet.getNetwork) {
       return;
     }
 
+    let details: { networkPassphrase?: string };
     try {
-      const details = await this.wallet.getNetwork();
-      if (!details.networkPassphrase) {
-        return;
-      }
-      if (details.networkPassphrase !== network.networkPassphrase) {
-        throw new WalletNetworkMismatchError(network.networkPassphrase, details.networkPassphrase);
-      }
+      details = await this.wallet.getNetwork();
     } catch (error) {
-      if (error instanceof WalletNetworkMismatchError) {
-        throw error;
-      }
+      throw new SoroWillError('Failed to read the wallet network; refusing to sign', { cause: error });
+    }
+    const actual = details?.networkPassphrase ?? '';
+    if (actual !== network.networkPassphrase) {
+      throw new WalletNetworkMismatchError(network.networkPassphrase, actual);
     }
   }
 

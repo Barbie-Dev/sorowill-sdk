@@ -63,6 +63,41 @@ export function isRetryableRpcConnectionError(error: unknown): boolean {
 }
 
 /**
+ * Detects whether an error is specifically a timeout (as opposed to a generic
+ * connection failure). Timeout errors are retried with exponential backoff
+ * because a slow-but-healthy RPC endpoint may simply need more time, whereas
+ * other connection errors are handled by endpoint failover.
+ */
+export function isRpcTimeoutError(error: unknown): boolean {
+  const TIMEOUT_FRAGMENTS = ['timeout', 'timed out', 'etimedout', 'deadline exceeded'];
+
+  const matches = (text: string): boolean => {
+    const lower = text.toLowerCase();
+    return TIMEOUT_FRAGMENTS.some((fragment) => lower.includes(fragment));
+  };
+
+  if (error instanceof Error) {
+    return matches(error.message) || matches(error.name);
+  }
+
+  if (typeof error === 'string') {
+    return matches(error);
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const obj = error as Record<string, unknown>;
+    if (typeof obj['message'] === 'string' && matches(obj['message'])) {
+      return true;
+    }
+    if (typeof obj['name'] === 'string' && matches(obj['name'])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Milliseconds to wait after a failover before opportunistically retrying
  * the originally preferred (first-listed) RPC endpoint again. Without this,
  * a single transient blip on the primary endpoint would pin the pool to
@@ -71,50 +106,45 @@ export function isRetryableRpcConnectionError(error: unknown): boolean {
 const DEFAULT_FAILOVER_COOLDOWN_MS = 60_000;
 
 /**
- * Default per-endpoint timeout in milliseconds (issue #485).
- *
- * If an endpoint does not respond within this window the pool treats it as a
- * transient failure, rotates it to the back, and retries the next endpoint.
- * 30 seconds is a conservative but practical ceiling for a Soroban RPC call.
+ * Terminal transaction statuses reported by `getTransaction`. A transaction
+ * in any of these states has already been resolved on-chain, so a fee-bump
+ * must NOT be submitted for it (doing so risks a duplicate operation).
  */
-const DEFAULT_ENDPOINT_TIMEOUT_MS = 30_000;
+const TERMINAL_TRANSACTION_STATUSES = new Set(['SUCCESS', 'FAILED']);
 
 /**
- * Races `promise` against a timeout.
+ * Queries the network for the current status of a submitted transaction.
  *
- * If `timeoutMs` is not a positive finite number the original promise is
- * returned unchanged so existing callers that pass `0` or `Infinity` are
- * unaffected.
+ * Returns `true` when the transaction has reached a terminal state
+ * (`SUCCESS` or `FAILED`) and therefore must not be fee-bumped, and `false`
+ * when it is still pending (e.g. `NOT_FOUND`) or its status cannot be
+ * determined. Callers that gate a fee-bump on this result should treat an
+ * indeterminate status as "still pending" so a genuinely stuck transaction
+ * is not left unbumped.
  */
-function withEndpointTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return promise;
+export async function isTransactionResolved(
+  server: SoroWillRpcServer,
+  transactionHash: string,
+): Promise<boolean> {
+  try {
+    const response = await server.getTransaction(transactionHash);
+    const status = (response as { status?: unknown }).status;
+    return typeof status === 'string' && TERMINAL_TRANSACTION_STATUSES.has(status);
+  } catch {
+    // A lookup failure (e.g. the transaction is not yet indexed) means we
+    // cannot confirm resolution, so report it as unresolved and allow the
+    // caller to proceed with the bump.
+    return false;
   }
-
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`RPC endpoint timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err: unknown) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    );
-  });
 }
 
 export class RpcEndpointPool {
   private readonly servers: SoroWillRpcServer[];
   private readonly rpcUrls: string[];
   private readonly failoverCooldownMs: number;
-  /** Per-endpoint response timeout in milliseconds (issue #485). */
-  private readonly endpointTimeoutMs: number;
+  private readonly timeoutMs: number;
+  private readonly timeoutMaxAttempts: number;
+  private readonly timeoutRetryBaseDelayMs: number;
   private activeIndex = 0;
   private lastFailoverAt: number | null = null;
 
@@ -126,16 +156,20 @@ export class RpcEndpointPool {
    * @param failoverCooldownMs - How long to keep using a backup endpoint
    * after a failover before opportunistically retrying the primary
    * (first-listed) endpoint again. Defaults to {@link DEFAULT_FAILOVER_COOLDOWN_MS}.
-   * @param endpointTimeoutMs - Maximum time to wait for a single endpoint
-   * before treating it as unresponsive and rotating to the next one.
-   * Defaults to {@link DEFAULT_ENDPOINT_TIMEOUT_MS}. Pass `0` or `Infinity`
-   * to disable the per-endpoint timeout entirely.
+   * @param timeoutMs - Per-request RPC timeout in milliseconds. Defaults to
+   * {@link DEFAULT_RPC_TIMEOUT_MS} (30s).
+   * @param timeoutMaxAttempts - Maximum attempts (initial try + retries) for
+   * timeout errors. Defaults to {@link DEFAULT_RPC_TIMEOUT_MAX_ATTEMPTS}.
+   * @param timeoutRetryBaseDelayMs - Base delay for exponential backoff on
+   * timeout errors. Defaults to {@link DEFAULT_RPC_TIMEOUT_RETRY_BASE_DELAY_MS}.
    */
   constructor(
     rpcUrls: readonly string[],
     serverOverride?: SoroWillRpcServer,
     failoverCooldownMs: number = DEFAULT_FAILOVER_COOLDOWN_MS,
-    endpointTimeoutMs: number = DEFAULT_ENDPOINT_TIMEOUT_MS,
+    timeoutMs: number = DEFAULT_RPC_TIMEOUT_MS,
+    timeoutMaxAttempts: number = DEFAULT_RPC_TIMEOUT_MAX_ATTEMPTS,
+    timeoutRetryBaseDelayMs: number = DEFAULT_RPC_TIMEOUT_RETRY_BASE_DELAY_MS,
   ) {
     const normalizedRpcUrls = rpcUrls
       .map((rpcUrl) => rpcUrl.trim())
@@ -156,11 +190,17 @@ export class RpcEndpointPool {
 
     this.rpcUrls = uniqueRpcUrls;
     this.failoverCooldownMs = failoverCooldownMs;
-    this.endpointTimeoutMs = endpointTimeoutMs;
+    this.timeoutMs = timeoutMs;
+    this.timeoutMaxAttempts = Math.max(1, timeoutMaxAttempts);
+    this.timeoutRetryBaseDelayMs = timeoutRetryBaseDelayMs;
     this.servers = serverOverride
       ? uniqueRpcUrls.map(() => serverOverride)
       : uniqueRpcUrls.map(
-          (rpcUrl) => new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') }),
+          (rpcUrl) =>
+            new rpc.Server(rpcUrl, {
+              allowHttp: rpcUrl.startsWith('http://'),
+              timeout: timeoutMs,
+            }),
         );
   }
 
@@ -180,30 +220,59 @@ export class RpcEndpointPool {
     }
   }
 
+  /**
+   * Runs `operation` against the active endpoint, retrying timeout errors with
+   * exponential backoff before falling back to the next endpoint. Non-timeout
+   * connection errors skip straight to failover.
+   */
+  private async runWithTimeoutRetry<T>(
+    operation: (server: SoroWillRpcServer, rpcUrl: string) => Promise<T>,
+    server: SoroWillRpcServer,
+    rpcUrl: string,
+  ): Promise<T> {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < this.timeoutMaxAttempts; attempt += 1) {
+      try {
+        return await operation(server, rpcUrl);
+      } catch (error) {
+        lastError = error;
+        const isLastAttempt = attempt === this.timeoutMaxAttempts - 1;
+        if (!isRpcTimeoutError(error) || isLastAttempt) {
+          throw error;
+        }
+        await sleep(this.timeoutRetryBaseDelayMs * 2 ** attempt);
+      }
+    }
+
+    throw lastError ?? new Error('RPC timeout retries exhausted');
+  }
+
   async withFailover<T>(operation: (server: SoroWillRpcServer, rpcUrl: string) => Promise<T>): Promise<T> {
     this.maybeRepromotePrimaryEndpoint();
     let lastError: unknown;
 
     for (let attempt = 0; attempt < this.servers.length; attempt += 1) {
-      const rpcUrl = this.rpcUrls[this.activeIndex];
-      const server = this.servers[this.activeIndex];
+      const index = this.activeIndex;
+      const rpcUrl = this.rpcUrls[index];
+      const server = this.servers[index];
 
       if (!rpcUrl || !server) {
         break;
       }
 
       try {
-        // Enforce a per-endpoint timeout so a hanging primary endpoint does
-        // not block the pool forever — it is rotated to the back of the pool
-        // and the next endpoint is tried instead (issue #485).
-        return await withEndpointTimeout(operation(server, rpcUrl), this.endpointTimeoutMs);
+        return await this.runWithTimeoutRetry(operation, server, rpcUrl);
       } catch (error) {
         lastError = error;
         if (!isRetryableRpcConnectionError(error) || attempt === this.servers.length - 1) {
           throw error;
         }
-        this.lastFailoverAt = Date.now();
-        this.activeIndex = (this.activeIndex + 1) % this.servers.length;
+        // Only advance if no concurrent call has already failed over away from this endpoint.
+        if (this.activeIndex === index) {
+          this.lastFailoverAt = Date.now();
+          this.activeIndex = (index + 1) % this.servers.length;
+        }
       }
     }
 
@@ -216,5 +285,24 @@ export class RpcEndpointPool {
       throw new Error('No active RPC URL is configured');
     }
     return rpcUrl;
+  }
+
+  /**
+   * Returns the RPC server bound to the pool's *current* active endpoint.
+   *
+   * Callers that cache a server reference (e.g. `getNetworkFeeStats` on a
+   * fresh client instance) would otherwise keep talking to whichever
+   * endpoint was active when the reference was captured, detaching from the
+   * client's current network context after a network switch or failover.
+   * Resolving the server lazily through this accessor keeps fee queries
+   * pinned to the live network context.
+   */
+  getActiveServer(): SoroWillRpcServer {
+    this.maybeRepromotePrimaryEndpoint();
+    const server = this.servers[this.activeIndex];
+    if (!server) {
+      throw new Error('No active RPC server is configured');
+    }
+    return server;
   }
 }

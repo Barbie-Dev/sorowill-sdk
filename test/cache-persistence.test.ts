@@ -155,6 +155,46 @@ describe('LocalStorageCachePersistenceAdapter', () => {
   });
 });
 
+describe('ReadCache Date round-tripping through persistence (issue #398)', () => {
+  it('hydrates a persisted Date field back into a Date instance', async () => {
+    const adapter = new MemoryCachePersistenceAdapter();
+    const cache = new ReadCache({ persistence: adapter });
+    await cache.ready();
+
+    const lastCheckin = new Date('2024-01-15T00:00:00.000Z');
+    cache.set('will:1', { id: '1', lastCheckin }, ['1']);
+
+    // Give the async persistence write a tick to land.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const hydratedCache = new ReadCache({ persistence: adapter });
+    await hydratedCache.ready();
+
+    const hydrated = hydratedCache.get<{ id: string; lastCheckin: Date }>('will:1');
+    expect(hydrated).toBeDefined();
+    expect(hydrated!.lastCheckin).toBeInstanceOf(Date);
+    expect(hydrated!.lastCheckin.getTime()).toBe(lastCheckin.getTime());
+  });
+
+  it('still round-trips bigint values alongside Date fields', async () => {
+    const adapter = new MemoryCachePersistenceAdapter();
+    const cache = new ReadCache({ persistence: adapter });
+    await cache.ready();
+
+    const lastCheckin = new Date('2024-01-15T00:00:00.000Z');
+    cache.set('will:1', { id: '1', balance: 123456789n, lastCheckin }, ['1']);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const hydratedCache = new ReadCache({ persistence: adapter });
+    await hydratedCache.ready();
+
+    const hydrated = hydratedCache.get<{ id: string; balance: bigint; lastCheckin: Date }>('will:1');
+    expect(hydrated!.balance).toBe(123456789n);
+    expect(hydrated!.lastCheckin).toBeInstanceOf(Date);
+  });
+});
+
 describe('MemoryCachePersistenceAdapter', () => {
   it('readAll returns empty array initially', async () => {
     const adapter = new MemoryCachePersistenceAdapter();
