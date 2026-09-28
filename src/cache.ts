@@ -29,6 +29,7 @@ interface CacheEntry {
   value: unknown;
   expiresAt: number | null;
   willIds: Set<string>;
+  locale: string | undefined;
 }
 
 function serializeCacheValue(value: unknown): string {
@@ -117,6 +118,12 @@ export function createReadCacheKey(method: string, args: Record<string, unknown>
  *
  * Without persistence, the cache is immediately ready and can be used after
  * construction.
+ *
+ * LOCALE AWARENESS: Cache keys include the locale, but a locale change must not
+ * return results cached under the previous locale. When the active locale
+ * changes (via the constructor option or `setLocale()`), all entries belonging
+ * to the previous locale are invalidated so stale translations are never
+ * served.
  */
 export class ReadCache {
   private readonly entries = new Map<string, CacheEntry>();
@@ -153,6 +160,39 @@ export class ReadCache {
 
   async ready(): Promise<void> {
     await this.readyPromise;
+  }
+
+  /**
+   * Returns the locale currently associated with this cache instance.
+   */
+  getLocale(): string | undefined {
+    return this.locale;
+  }
+
+  /**
+   * Updates the active locale. If the locale actually changed, every entry
+   * cached under the previous locale is invalidated (in memory and, when
+   * configured, in persistent storage) so that subsequent reads cannot return
+   * stale translations.
+   */
+  async setLocale(locale: string | undefined): Promise<void> {
+    if (locale === this.locale) {
+      return;
+    }
+
+    const previousLocale = this.locale;
+    this.locale = locale;
+
+    await this.readyPromise;
+
+    const keysToDelete: string[] = [];
+    for (const [key, entry] of this.entries) {
+      if (entry.locale === previousLocale) {
+        keysToDelete.push(key);
+      }
+    }
+
+    await Promise.all(keysToDelete.map((key) => this.delete(key)));
   }
 
   /**
@@ -196,6 +236,7 @@ export class ReadCache {
       value,
       expiresAt: this.now() + this.ttlMs,
       willIds: new Set(willIds),
+      locale: this.locale,
     };
 
     this.touchedKeys.add(key);
@@ -306,6 +347,7 @@ export class ReadCache {
         value: deserializeCacheValue(persistedEntry.value),
         expiresAt: persistedEntry.expiresAt,
         willIds: new Set(persistedEntry.willIds),
+        locale: this.locale,
       });
     }
 
