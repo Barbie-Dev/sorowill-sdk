@@ -685,9 +685,28 @@ export class SoroWillClient {
     }
 
     if (this.readCache && options.eventSource) {
-      this.eventSubscription = options.eventSource.subscribe((event) => {
-        void this.readCache?.invalidateByWillId(event.willId);
-      });
+      // Subscribe and automatically clean up the listener if setup throws.
+      // Without this guard, a thrown error during subscribe leaves an orphaned
+      // listener attached to the event source, causing memory leaks and stale
+      // event deliveries on every subsequent subscription attempt (issue #484).
+      let subscription: WillEventSubscription | undefined;
+      try {
+        subscription = options.eventSource.subscribe((event) => {
+          void this.readCache?.invalidateByWillId(event.willId);
+        });
+        this.eventSubscription = subscription;
+      } catch (err) {
+        // If a partial subscription was registered before the error, clean it
+        // up before re-throwing so no orphaned listeners remain.
+        if (subscription !== undefined) {
+          try {
+            unsubscribeFromWillEvents(subscription);
+          } catch {
+            // Best-effort cleanup; swallow secondary errors.
+          }
+        }
+        throw err;
+      }
     }
   }
 
