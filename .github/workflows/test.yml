@@ -21,6 +21,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # npm ci already refuses to install when package-lock.json cannot satisfy
+      # package.json; this step additionally requires the lock's recorded ranges
+      # to match package.json exactly, so stale lock files fail fast.
+      - name: Verify lock file is up to date
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const root = require("./package-lock.json").packages[""];
+            const fields = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+            const bad = fields.filter((f) => JSON.stringify(pkg[f] ?? {}) !== JSON.stringify(root[f] ?? {}));
+            if (bad.length) {
+              console.error(`::error file=package-lock.json::package-lock.json is out of sync with package.json (${bad.join(", ")}). Run npm install and commit the updated lock file.`);
+              process.exit(1);
+            }
+          '
+
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 

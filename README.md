@@ -8,6 +8,28 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
+## Requirements
+
+- **Node.js 22+** (see `engines` in `package.json`) or a modern browser.
+- **A Stellar wallet for any state-changing call.** Read-only methods work without a wallet, but every method that signs and submits a transaction (creating a will, checking in, claiming, etc.) needs a connected, compatible wallet. The default and most common setups are:
+  - **[Freighter](https://www.freighter.app/)** browser extension — the default `freighterAdapter`. Install it from [freighter.app](https://www.freighter.app/) and install the optional peer `@stellar/freighter-api`.
+  - **WalletConnect-compatible mobile wallets** (e.g. [LOBSTR](https://lobstr.co/)) via `WalletConnectAdapter` — requires a WalletConnect project ID from [WalletConnect Cloud](https://cloud.walletconnect.com/). See [Pairing LOBSTR](#pairing-lobstr).
+  - Other supported adapters: Albedo (`createAlbedoAdapter()`), Ledger (`@ledgerhq/hw-app-str`, see [Connecting Ledger](#connecting-ledger)), Hana, HOT, and any injected wallet. See [Pluggable wallets](#pluggable-wallets).
+  - Scripts, CI, and servers without a browser wallet can use `KeypairSigner` — see [Scripts, automation, and testing](#scripts-automation-and-testing-keypairsigner).
+- **A funded account on the target network** (use [Friendbot](https://developers.stellar.org/docs/learn/fundamentals/networks#friendbot) on testnet), with the wallet switched to the same network as the client.
+
+### Troubleshooting wallet connection
+
+| Symptom | Likely cause and fix |
+|---|---|
+| `isFreighterInstalled()` returns `false` | The Freighter extension is not installed or not enabled for this site. Install it from [freighter.app](https://www.freighter.app/) and reload the page. |
+| `Cannot find module '@stellar/freighter-api'` | The optional peer is missing. Run `npm install @stellar/freighter-api`, or pass a different wallet adapter. |
+| Wallet network mismatch error | The wallet is on a different network (e.g. Mainnet vs Testnet). Switch the network in the wallet to match the client's `networkPassphrase`. |
+| Connection prompt never appears | The user dismissed or blocked the popup, or the page is not served over `https`/`localhost`. Retry `connectWallet()` from a user gesture (click handler). |
+| WalletConnect pairing hangs | Invalid/missing WalletConnect project ID, or the mobile wallet is not on the same network. Re-check the project ID and re-scan the QR code. |
+| `Account not found` when submitting | The wallet's account is not funded on this network. Fund it (Friendbot on testnet) and retry. |
+| Nothing works in Node.js | Browser wallets are unavailable outside a browser. Use `KeypairSigner` for scripts and tests. |
+
 ## Installation
 
 ```bash
@@ -358,6 +380,43 @@ For applications that need custom signing logic (e.g. multi-sig, custom key deri
 
 ### Multisig
 
+Wills can be owned by a Stellar multi-signature account. The built-in wallet adapters sign with a single key, so when the owner account's thresholds require more than one signer, collect signatures out-of-band and submit the fully signed envelope:
+
+```ts
+import {
+  MultisigCollector,
+  buildMultisigTransactionXdr,
+  signWithSecretKey,
+} from '@sorowill/sdk';
+
+// 1. Build the unsigned transaction with the multi-sig account as source.
+const txXdr = await buildMultisigTransactionXdr({
+  rpcUrl,
+  networkPassphrase,
+  contractAddress,
+  method: 'check_in',
+  args: { will_id: 1n },
+  sourceAccount: multisigAccountPublicKey,
+});
+
+// 2. Collect a signature from each co-signer (wallet, hardware device, or script).
+const collector = new MultisigCollector({ transactionXdr: txXdr, networkPassphrase, threshold: 2 });
+collector.addSignature(signerA, signWithSecretKey(txXdr, signerASecret, networkPassphrase));
+collector.addSignature(signerB, signatureFromSignerB);
+
+// 3. Once the threshold is met, submit the signed envelope.
+if (collector.isReady) {
+  await client.submitSignedTransaction(collector.build().toXDR());
+}
+```
+
+Notes:
+
+- Every co-signer must sign the **same** transaction XDR; signing a rebuilt transaction (different sequence number or fee) produces signatures that will not verify.
+- Set `threshold` to the account's threshold for the operation (medium threshold for contract invocations), not the number of signers.
+- Collect signatures before the transaction's time bound expires; otherwise rebuild and re-collect.
+- `signWithSecretKey` is for scripts and testing only — never handle raw secret keys in a browser.
+
 | Export | Kind | Source module | Description |
 |---|---|---|---|
 | `MultisigCollector` | class | `multisig` | Collects partial signatures for a multi-sig transaction |
@@ -403,6 +462,8 @@ For applications that need custom signing logic (e.g. multi-sig, custom key deri
 | Export | Kind | Source module | Description |
 |---|---|---|---|
 | `RequestQueue` | class | `requestQueue` | FIFO queue with concurrency and rate-limit controls used internally by the client |
+
+**Ordering guarantees.** State-changing calls (`createWill`, `checkIn`, `batch`, and other signed submissions) made on the same client are serialized per account: each one loads the sequence number, signs, submits, and waits for a terminal status — including any RPC retries and fee-bump resubmission — before the next begins. A retried operation therefore can never land after an operation issued later. Read-only RPC calls go through `RequestQueue` concurrently and carry no ordering guarantee across retries. Multiple `SoroWillClient` instances (or other apps) signing for the same account are not coordinated with each other; use a single client per account.
 
 ### Events
 
@@ -756,11 +817,19 @@ These tradeoffs and their planned mitigations are tracked in the issue tracker (
 ```bash
 git clone https://github.com/SoroWill/sorowill-sdk.git
 cd sorowill-sdk
-npm install
+npm ci
 npm run typecheck
 npm test
 npm run build
 ```
+
+### Dependency lock file
+
+`package-lock.json` is committed and is the source of truth for every direct and transitive dependency version. CI installs with `npm ci` and fails if the lock file is out of sync with `package.json`.
+
+- Use `npm ci` for a clean, reproducible install.
+- When you add, remove, or upgrade a dependency, run `npm install` and commit the updated `package-lock.json` together with `package.json`.
+- Do not use yarn or pnpm in this repo, and do not delete the lock file to "fix" install errors.
 
 ## Contributing via Drips Wave
 

@@ -613,6 +613,8 @@ export class SoroWillClient {
   private readonly webSocketFactory: ((url: string) => WebSocketLike) | undefined;
   private readonly fetchImpl: FetchImplementation;
   private readonly queue: RequestQueue;
+  /** Tail of the per-account write chain; see {@link SoroWillClient.serializeWrite}. */
+  private writeChain: Promise<unknown> = Promise.resolve();
   private readonly inFlightTracker: InFlightTracker;
   private readonly timeoutMs: number;
   private readonly readCache: ReadCache | undefined;
@@ -1312,43 +1314,45 @@ export class SoroWillClient {
     let txHash: string | null = null;
     let error: string | null = null;
     try {
-      const spec = await this.getSpec(options);
-      const contractOperations = operations.map(({ method, args }) =>
-        this.contract.call(method, ...spec.funcArgsToScVals(method, args)),
-      );
+      return await this.serializeWrite(async () => {
+        const spec = await this.getSpec(options);
+        const contractOperations = operations.map(({ method, args }) =>
+          this.contract.call(method, ...spec.funcArgsToScVals(method, args)),
+        );
 
-      const publicKey = await this.getWalletPublicKey();
-      const account = await this.rpc(
-        () => this.rpcPool.withFailover((server) => server.getAccount(publicKey)),
-        options,
-      );
-      const builder = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
+        const publicKey = await this.getWalletPublicKey();
+        const account = await this.rpc(
+          () => this.rpcPool.withFailover((server) => server.getAccount(publicKey)),
+          options,
+        );
+        const builder = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        });
+        for (const op of contractOperations) {
+          builder.addOperation(op);
+        }
+        const builtTx = builder.setTimeout(this.transactionTimeoutSeconds).build();
+
+        const prepared = await this.rpc(
+          () => this.rpcPool.withFailover((server) => server.prepareTransaction(builtTx)),
+          options,
+        );
+
+        assertPreparedTransactionMatchesIntendedOperation({
+          intendedTransactionXdr: builtTx.toXDR(),
+          preparedTransactionXdr: prepared.toXDR(),
+          networkPassphrase: this.networkPassphrase,
+          context: 'batch',
+        });
+
+        const signedTxXdr = await this.wallet.signTransaction(prepared.toXDR(), {
+          networkPassphrase: this.networkPassphrase,
+        });
+        const result = await this.submitSignedTransaction(signedTxXdr, options);
+        txHash = result.txHash;
+        return { txHash: result.txHash, createdAt: result.createdAt };
       });
-      for (const op of contractOperations) {
-        builder.addOperation(op);
-      }
-      const builtTx = builder.setTimeout(this.transactionTimeoutSeconds).build();
-
-      const prepared = await this.rpc(
-        () => this.rpcPool.withFailover((server) => server.prepareTransaction(builtTx)),
-        options,
-      );
-
-      assertPreparedTransactionMatchesIntendedOperation({
-        intendedTransactionXdr: builtTx.toXDR(),
-        preparedTransactionXdr: prepared.toXDR(),
-        networkPassphrase: this.networkPassphrase,
-        context: 'batch',
-      });
-
-      const signedTxXdr = await this.wallet.signTransaction(prepared.toXDR(), {
-        networkPassphrase: this.networkPassphrase,
-      });
-      const result = await this.submitSignedTransaction(signedTxXdr, options);
-      txHash = result.txHash;
-      return { txHash: result.txHash, createdAt: result.createdAt };
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       throw err;
@@ -1854,8 +1858,35 @@ export class SoroWillClient {
         }>;
   }
 
+  /**
+   * Runs state-changing submissions for this client's account strictly one at a
+   * time, in call order. Each write loads the account sequence number, signs,
+   * submits, and waits for a terminal status (including any RPC retries or
+   * fee-bump resubmission) before the next write starts, so a retried operation
+   * can never land after an operation that was issued later.
+   */
+  private serializeWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.writeChain.then(operation, operation);
+    this.writeChain = result.catch(() => undefined);
+    return result;
+  }
+
+  /** Builds, signs, submits, and polls a set of operations as one transaction, serialized per account. */
+  private submit(
+    operations: readonly xdr.Operation[],
+    label: string,
+    options?: RequestOptions,
+  ): Promise<{
+    txHash: string;
+    createdAt: number;
+    returnValue: ScVal | undefined;
+    events?: Array<{ topics: string[]; data: unknown }>;
+  }> {
+    return this.serializeWrite(() => this.submitUnserialized(operations, label, options));
+  }
+
   /** Builds, signs, submits, and polls a set of operations as one transaction. */
-  private async submit(
+  private async submitUnserialized(
     operations: readonly xdr.Operation[],
     label: string,
     options?: RequestOptions,
