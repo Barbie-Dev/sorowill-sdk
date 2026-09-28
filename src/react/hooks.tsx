@@ -96,9 +96,9 @@ export function useWill(
   const [isStale, setIsStale] = getReact().useState(false);
   const [fetchKey, setFetchKey] = getReact().useState(0);
 
-  const refetch = getReact().useCallback(() => setFetchKey((k) => k + 1), []);
+  const refetch = React.useCallback(() => setFetchKey((k) => k + 1), []);
 
-  getReact().useEffect(() => {
+  React.useEffect(() => {
     if (!willId) {
       setData(null);
       setError(null);
@@ -158,9 +158,9 @@ export function useWillsByOwner(
   const [isStale, setIsStale] = getReact().useState(false);
   const [fetchKey, setFetchKey] = getReact().useState(0);
 
-  const refetch = getReact().useCallback(() => setFetchKey((k) => k + 1), []);
+  const refetch = React.useCallback(() => setFetchKey((k) => k + 1), []);
 
-  getReact().useEffect(() => {
+  React.useEffect(() => {
     if (!owner) {
       setData(null);
       setError(null);
@@ -220,9 +220,9 @@ export function useWillsByBeneficiary(
   const [isStale, setIsStale] = getReact().useState(false);
   const [fetchKey, setFetchKey] = getReact().useState(0);
 
-  const refetch = getReact().useCallback(() => setFetchKey((k) => k + 1), []);
+  const refetch = React.useCallback(() => setFetchKey((k) => k + 1), []);
 
-  getReact().useEffect(() => {
+  React.useEffect(() => {
     if (!beneficiary) {
       setData(null);
       setError(null);

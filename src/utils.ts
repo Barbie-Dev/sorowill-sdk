@@ -59,9 +59,16 @@ export function formatUSDC(stroops: bigint, decimals = USDC_DECIMALS): string {
   const cents = totalCents % 100n;
 
   const wholeFormatted = whole.toLocaleString('en-US');
-  const centsFormatted = cents.toString().padStart(2, '0');
 
-  return `${negative ? '-' : ''}${wholeFormatted}.${centsFormatted}`;
+  if (decimals <= 0) {
+    return `${negative ? '-' : ''}${wholeFormatted}`;
+  }
+
+  const fractionFormatted = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
+
+  return fractionFormatted === ''
+    ? `${negative ? '-' : ''}${wholeFormatted}`
+    : `${negative ? '-' : ''}${wholeFormatted}.${fractionFormatted}`;
 }
 
 /**

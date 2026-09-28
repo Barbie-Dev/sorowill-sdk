@@ -85,6 +85,37 @@ export function assertReasonableFeeBumpFee(
 }
 
 /**
+ * Tracks sequence numbers that were consumed by fee-bump transactions which
+ * have already failed. A failed fee-bump may still have consumed its inner
+ * transaction's sequence number on the network, so a retry that reuses the
+ * same sequence number can be rejected as a duplicate. Callers can consult
+ * this set before retrying to decide whether the inner transaction must be
+ * rebuilt with a fresh sequence number.
+ */
+const failedFeeBumpSequenceNumbers = new Set<string>();
+
+/**
+ * Record the sequence number of an inner transaction whose fee-bump attempt
+ * failed, so that a subsequent retry does not blindly reuse it.
+ */
+export function trackFailedFeeBumpSequence(sequence: string): void {
+  failedFeeBumpSequenceNumbers.add(sequence);
+}
+
+/**
+ * Returns true when the given sequence number was previously consumed by a
+ * failed fee-bump transaction and therefore must not be reused on retry.
+ */
+export function isFeeBumpSequenceReused(sequence: string): boolean {
+  return failedFeeBumpSequenceNumbers.has(sequence);
+}
+
+/** Clears the tracked failed fee-bump sequence numbers (primarily for tests). */
+export function resetFailedFeeBumpSequences(): void {
+  failedFeeBumpSequenceNumbers.clear();
+}
+
+/**
  * Build a fee-bump transaction that wraps an inner transaction,
  * allowing a different account (the fee sponsor) to pay the network fee.
  *
@@ -200,6 +231,7 @@ export async function submitFeeBumpTransaction(
 
   const sendResponse = await pool.withFailover((server) => server.sendTransaction(feeBumpTx));
   if (sendResponse.status === 'ERROR') {
+    trackFailedFeeBumpSequence(innerSequence);
     const errorResponse = sendResponse as SendTransactionErrorResponse;
     const diagnosticInfo = errorResponse.diagnosticEventsXdr ?
       ` (diagnostics: ${errorResponse.diagnosticEventsXdr})` : '';
@@ -224,6 +256,7 @@ export async function submitFeeBumpTransaction(
     server.pollTransaction(sendResponse.hash, { attempts: pollAttempts }),
   );
   if (txResponse.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+    trackFailedFeeBumpSequence(innerSequence);
     const failed = txResponse as { resultXdr?: unknown; diagnosticEventsXdr?: unknown };
     const resultDetail = failed.resultXdr ? ` (result: ${xdrToString(failed.resultXdr)})` : '';
     const diagnosticDetail = failed.diagnosticEventsXdr ?
@@ -266,12 +299,19 @@ export async function submitFeeBump(options: {
   }
   const publicKey = keypair.publicKey();
 
+  const innerTx = TransactionBuilder.fromXDR(
+    options.innerTransactionXdr,
+    config.networkPassphrase,
+  ) as Transaction;
+
+  if (isFeeBumpSequenceReused(innerTx.sequence)) {
+    throw new Error(
+      `Fee-bump retry would reuse sequence number ${innerTx.sequence}, which was already consumed by a failed transaction. Rebuild the inner transaction with a fresh sequence number before retrying.`,
+    );
+  }
+
   let fee = options.fee;
   if (!fee) {
-    const innerTx = TransactionBuilder.fromXDR(
-      options.innerTransactionXdr,
-      config.networkPassphrase,
-    ) as Transaction;
     fee = innerTx.fee;
   }
 
