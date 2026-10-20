@@ -505,7 +505,7 @@ const PERCENT_TO_BASIS_POINTS = 100;
 
 /** Maps SDK beneficiaries (0-100 `percentage`) to the contract's `{ address, basis_points }` shape. */
 function toContractBeneficiaries(
-  beneficiaries: Beneficiary[],
+  beneficiaries: readonly Beneficiary[],
 ): Array<{ address: string; basis_points: number }> {
   return beneficiaries.map((beneficiary) => ({
     address: beneficiary.address,

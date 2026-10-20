@@ -107,7 +107,7 @@ export interface Beneficiary {
    * Stellar address of the beneficiary.
    * @since 0.1.0
    */
-  address: string;
+  readonly address: string;
   /**
    * Share of the will's balance this beneficiary receives, expressed as a
    * whole percentage on the 0–100 scale. All beneficiary percentages in a
@@ -121,7 +121,7 @@ export interface Beneficiary {
    *
    * @since 0.1.1
    */
-  percentage: number;
+  readonly percentage: number;
 }
 
 /**
@@ -187,22 +187,22 @@ export interface Will {
    * Unique identifier for this will, as a decimal string (contract-side `u64`).
    * @since 0.1.0
    */
-  id: string;
+  readonly id: string;
   /**
    * The address that created and funds the will.
    * @since 0.1.0
    */
-  owner: string;
+  readonly owner: string;
   /**
    * The token contract address (e.g. a USDC Stellar Asset Contract) held by the will.
    * @since 0.1.0
    */
-  token: string;
+  readonly token: string;
   /**
    * The amount of `token` currently locked, in base units, as a decimal string.
    * @since 0.1.0
    */
-  balance: string;
+  readonly balance: string;
   /**
    * The beneficiaries and their percentage shares (0-100 scale). Always sums
    * to 100. On-chain these are stored as basis points summing to 10,000; the
@@ -213,27 +213,27 @@ export interface Will {
    * migrate.
    * @since 0.1.0
    */
-  beneficiaries: Beneficiary[];
+  readonly beneficiaries: readonly Beneficiary[];
   /**
    * How many days the owner may go without checking in before the will can be triggered.
    * @since 0.1.0
    */
-  checkinPeriodDays: number;
+  readonly checkinPeriodDays: number;
   /**
    * How many days after being triggered the owner has to prove they are alive.
    * @since 0.1.0
    */
-  gracePeriodDays: number;
+  readonly gracePeriodDays: number;
   /**
    * When the owner last checked in.
    * @since 0.1.0
    */
-  lastCheckin: Date;
+  readonly lastCheckin: Date;
   /**
    * When the will was triggered, or `null` if it has never been triggered.
    * @since 0.1.0
    */
-  triggerTime: Date | null;
+  readonly triggerTime: Date | null;
   /**
    * Current lifecycle state of the will.
    *
@@ -242,43 +242,43 @@ export interface Will {
    * switch/if-chain over `WillStatus`, add handling for these new values.
    * @since 0.1.0
    */
-  status: WillStatus;
+  readonly status: WillStatus;
   /**
    * Optional guardian addresses (up to 3) who may force an early release.
    * @since 0.1.0
    */
-  guardians: string[];
+  readonly guardians: readonly string[];
   /**
    * Number of distinct guardians who have voted in the current release cycle.
    * @since 0.1.0
    */
-  guardianVotes: number;
+  readonly guardianVotes: number;
 }
 
 /** Parameters for {@link SoroWillClient.createWill}. */
 export interface CreateWillParams {
   /** The token contract address (e.g. a USDC Stellar Asset Contract) to lock. */
-  token: string;
+  readonly token: string;
   /** The amount of `token` to lock, in base units, as a decimal string. */
-  amount: string;
+  readonly amount: string;
   /**
    * 1 to 10 beneficiaries whose `percentage` values (0-100 scale) sum to
    * exactly 100. The SDK scales these to basis points (summing to 10,000)
    * before submitting to the contract.
    */
-  beneficiaries: Beneficiary[];
+  readonly beneficiaries: readonly Beneficiary[];
   /** How many days the owner may go without checking in. */
-  checkinPeriodDays: number;
+  readonly checkinPeriodDays: number;
   /** How many days after being triggered the owner has to prove they are alive. */
-  gracePeriodDays: number;
+  readonly gracePeriodDays: number;
   /** 0 to 3 guardian addresses that may jointly force an early release. */
-  guardians: string[];
+  readonly guardians: readonly string[];
 }
 
 /** Parameters for {@link SoroWillClient.updateBeneficiaries}. */
 export interface UpdateBeneficiariesParams {
-  willId: string;
-  beneficiaries: Beneficiary[];
+  readonly willId: string;
+  readonly beneficiaries: readonly Beneficiary[];
 }
 
 /** Optional client-side pagination controls for list-style SDK methods. */
@@ -291,8 +291,8 @@ export interface PaginationOptions {
 
 /** A page of wills plus the cursor needed to fetch the next page, if any. */
 export interface PaginatedWillsResult {
-  wills: Will[];
-  nextCursor: string | null;
+  readonly wills: Will[];
+  readonly nextCursor: string | null;
 }
 
 
@@ -332,16 +332,16 @@ export interface RequestOptions {
 }
 
 export interface SoroWillEvent {
-  id: string;
-  type: string;
-  cursor: string;
-  ledger: number | null;
-  ledgerClosedAt: Date | null;
-  contractId: string;
-  txHash: string | null;
-  topics: unknown[];
-  value: unknown;
-  raw: unknown;
+  readonly id: string;
+  readonly type: string;
+  readonly cursor: string;
+  readonly ledger: number | null;
+  readonly ledgerClosedAt: Date | null;
+  readonly contractId: string;
+  readonly txHash: string | null;
+  readonly topics: readonly unknown[];
+  readonly value: unknown;
+  readonly raw: unknown;
 }
 
 export interface EventSubscription {

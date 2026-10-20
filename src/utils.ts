@@ -199,7 +199,7 @@ export function isCheckinDue(will: Will): boolean {
  */
 export function calculateShares(
   balance: string,
-  beneficiaries: Beneficiary[],
+  beneficiaries: readonly Beneficiary[],
 ): Array<{ address: string; share: string }> {
   const total = BigInt(balance);
   let remaining = total;
@@ -222,7 +222,7 @@ export function calculateShares(
  * {@link calculateShares}, so the rounding remainder is attributed correctly.
  */
 export function tagOnChainOrder(
-  beneficiaries: Beneficiary[],
+  beneficiaries: readonly Beneficiary[],
 ): Array<Beneficiary & { onChainIndex: number }> {
   return beneficiaries.map((beneficiary, onChainIndex) => ({ ...beneficiary, onChainIndex }));
 }
@@ -272,7 +272,7 @@ export const MAX_GUARDIANS = 3;
  *   failures (empty list, too many entries, bad percentages, wrong sum)
  *   return `false` as before.
  */
-export function validateBeneficiaries(beneficiaries: Beneficiary[]): boolean {
+export function validateBeneficiaries(beneficiaries: readonly Beneficiary[]): boolean {
   if (beneficiaries.length === 0 || beneficiaries.length > MAX_BENEFICIARIES) {
     return false;
   }
@@ -309,7 +309,7 @@ export function validateBeneficiaries(beneficiaries: Beneficiary[]): boolean {
  * address (compared case-insensitively), which the contract rejects with
  * `WillError::DuplicateBeneficiary`.
  */
-export function hasDuplicateBeneficiaries(beneficiaries: Beneficiary[]): boolean {
+export function hasDuplicateBeneficiaries(beneficiaries: readonly Beneficiary[]): boolean {
   const addresses = new Set(beneficiaries.map((b) => b.address.toUpperCase()));
   return addresses.size !== beneficiaries.length;
 }
@@ -382,7 +382,7 @@ export function getNextActionableState(
 }
 
 export function validateGuardians(
-  guardians: string[],
+  guardians: readonly string[],
   ownerAddress?: string,
 ): boolean {
   if (!Array.isArray(guardians)) {

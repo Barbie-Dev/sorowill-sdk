@@ -45,7 +45,9 @@ describe('mapWill array cloning (issue #187)', () => {
     const will1 = await client.getWill('1');
 
     // Mutate the beneficiaries array from the first call
+    // @ts-expect-error -- Will arrays are readonly at the type level (#578); mutate anyway to test runtime cloning.
     will1.beneficiaries.push({ address: 'GBEN3', percentage: 100 });
+    // @ts-expect-error -- see above.
     will1.guardians.push('GGUARD3');
 
     // Get the same will again - if arrays were properly cloned,
@@ -150,6 +152,7 @@ describe('mapWill array cloning (issue #187)', () => {
 
     will1.lastCheckin.setTime(0);
     will1.triggerTime!.setTime(0);
+    // @ts-expect-error -- Beneficiary fields are readonly at the type level (#578).
     will1.beneficiaries[0]!.percentage = 1;
 
     const will2 = await client.getWill('1');
