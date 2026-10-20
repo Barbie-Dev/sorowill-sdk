@@ -60,6 +60,7 @@ import {
   UnsupportedBatchSizeError,
   WalletNetworkMismatchError,
   WebSocketNotConfiguredError,
+  WillNotFoundError,
 } from './errors';
 import { hasDuplicateBeneficiaries, MAX_GUARDIANS, validateBeneficiaries } from './utils';
 import { RequestQueue } from './requestQueue';
@@ -1258,6 +1259,69 @@ export class SoroWillClient {
     const will = mapWill(raw);
     this.readCache?.set(cacheKey, cloneWill(will), [canonicalWillId]);
     return will;
+  }
+
+  /**
+   * Fetches several wills in a single RPC round-trip via the contract's
+   * `get_wills` method, instead of issuing one `getWill` simulation per id.
+   *
+   * Results are returned in the same order as `willIds`. Duplicate ids are
+   * fetched once and repeated in the output. When the read cache is enabled,
+   * cached wills are served locally and only the missing ids are requested,
+   * so a fully cached batch makes no RPC call at all.
+   *
+   * Does not require a connected wallet.
+   *
+   * @throws {SoroWillInvalidIdError} If any id is not a non-negative integer string.
+   * @throws {TooManyIdsError} If the contract rejects the batch as too large.
+   */
+  async getWills(willIds: readonly string[], options?: RequestOptions): Promise<Will[]> {
+    const canonicalIds = willIds.map((willId) => parseWillId(willId).toString());
+    if (canonicalIds.length === 0) {
+      return [];
+    }
+
+    const found = new Map<string, Will>();
+    if (this.readCache) {
+      await this.readCache.ready();
+      for (const id of canonicalIds) {
+        const cached = this.readCache.get<Will>(createReadCacheKey('get_will', { willId: id }));
+        if (cached !== undefined) {
+          found.set(id, cached);
+        }
+      }
+    }
+
+    const missing = [...new Set(canonicalIds)].filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      const raw = await this.read<unknown>(
+        'get_wills',
+        { will_ids: missing.map((id) => BigInt(id)) },
+        options,
+      );
+      if (!Array.isArray(raw)) {
+        throw new SoroWillError(
+          'SoroWill expected a list of wills from get_wills but received something else. ' +
+            'This usually means the deployed contract spec and this SDK version have drifted apart.',
+        );
+      }
+      for (const will of raw.map(mapWill)) {
+        found.set(will.id, will);
+        this.readCache?.set(
+          createReadCacheKey('get_will', { willId: will.id }),
+          cloneWill(will),
+          [will.id],
+        );
+      }
+    }
+
+    return canonicalIds.map((id) => {
+      const will = found.get(id);
+      if (will === undefined) {
+        throw new WillNotFoundError();
+      }
+      return cloneWill(will);
+    });
   }
 
   /** Lists every will owned by `owner`. Does not require a connected wallet. */
