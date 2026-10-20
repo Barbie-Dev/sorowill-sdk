@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DebugLogger } from '../src/debugLogger';
 
-describe('Issue #212: DebugLogger logs caller-supplied details verbatim without redaction', () => {
+// Since #576 redaction is on by default; these tests cover the explicit
+// `redact: false` opt-out, which still logs caller-supplied details verbatim.
+describe('Issue #212: DebugLogger logs caller-supplied details verbatim when redaction is disabled', () => {
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
   let logger: DebugLogger;
 
   beforeEach(() => {
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    logger = new DebugLogger(true);
+    logger = new DebugLogger(true, { redact: false });
   });
 
   afterEach(() => {

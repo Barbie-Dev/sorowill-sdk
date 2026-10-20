@@ -70,7 +70,7 @@ import { buildSep7TxUri, type BuildSep7TxUriOptions } from './sep7';
 import { HookManager } from './hooks';
 import type { BeforeInvokeContext, AfterInvokeContext } from './hooks';
 import { assertPreparedTransactionMatchesIntendedOperation } from './txValidation';
-import { DebugLogger } from './debugLogger';
+import { DebugLogger, type DebugLoggerOptions } from './debugLogger';
 
 /** @internal Local alias for Soroban's `xdr.ScVal`; not part of the public API. */
 type ScVal = xdr.ScVal;
@@ -340,6 +340,12 @@ export interface SoroWillClientOptions {
    * Defaults to false (opt-in only).
    */
   debug?: boolean;
+  /**
+   * Controls redaction of sensitive fields in debug logs. Redaction is on by
+   * default; pass extra field names via `redactKeys` to extend
+   * {@link DEFAULT_REDACTED_KEYS}.
+   */
+  debugLoggerOptions?: DebugLoggerOptions;
   /**
    * If a transaction doesn't land within the poll window, automatically
    * rebuild and resubmit with a higher fee instead of throwing.
@@ -782,7 +788,7 @@ export class SoroWillClient {
       throw new RangeError('retry.backoffFactor must be a finite number of at least 1');
     }
     this.debug = options.debug ?? false;
-    this.debugLogger = new DebugLogger(this.debug);
+    this.debugLogger = new DebugLogger(this.debug, options.debugLoggerOptions);
     this.autoFeeBumpOnTimeout = options.autoFeeBumpOnTimeout ?? false;
     this.transactionTimeoutSeconds = options.transactionTimeoutSeconds ?? 30;
     if (!Number.isFinite(this.transactionTimeoutSeconds) || this.transactionTimeoutSeconds <= 0) {
