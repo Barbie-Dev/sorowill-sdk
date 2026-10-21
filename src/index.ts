@@ -64,6 +64,7 @@ export type {
   BatchResult,
   Beneficiary,
   CreateWillParams,
+  EmergencyCheckInOptions,
   PaginatedWillsResult,
   PaginationOptions,
   RequestOptions,
@@ -118,6 +119,8 @@ export {
   MemoryCachePersistenceAdapter,
   ReadCache,
   createReadCacheKey,
+  escapeCacheKeyComponent,
+  escapeKeyComponent,
 } from './cache';
 export type { CachePersistenceAdapter, PersistedCacheEntry, ReadCacheOptions } from './cache';
 
@@ -156,6 +159,7 @@ export {
   InsufficientBalanceError,
   InvalidContractIdError,
   InvalidDayCountError,
+  InvalidGuardianSignatureError,
   InvalidGuardianThresholdError,
   InvalidPaginationOptionsError,
   InvalidPercentageError,

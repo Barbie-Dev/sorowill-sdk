@@ -497,6 +497,41 @@ Every top-level export from `@sorowill/sdk` is listed below. When adding a new p
 | `SoroWillClient` | class | `SoroWillClient` | Main client for reading and writing to a deployed SoroWill contract |
 | `DEFAULT_CONTRACT_IDS` | const | `SoroWillClient` | Maintainer-managed default contract address per network; kept in sync with `deployments/` in the contracts repo |
 
+#### SoroWillClient Operations (Read-Only vs Write)
+
+`SoroWillClient` methods are categorized into read-only (query/builder/lifecycle) operations and write (state-changing) operations:
+
+| Method | Type | Requires Wallet | Description |
+|---|---|---|---|
+| `getWill(willId)` | Read-only | No | Queries full will details from contract state |
+| `getWillsByOwner(owner, options?)` | Read-only | No | Lists wills owned by an account (supports pagination) |
+| `getWillsByBeneficiary(beneficiary, options?)` | Read-only | No | Lists wills naming an account as beneficiary (supports pagination) |
+| `isHealthy(options?)` | Read-only | No | Checks whether the configured RPC endpoint is reachable |
+| `getActiveRpcUrl()` | Read-only | No | Returns the currently active RPC endpoint URL |
+| `getContractId()` | Read-only | No | Returns the configured contract ID |
+| `getNetwork()` | Read-only | No | Returns the configured network |
+| `getNetworkFeeStats(options?)` | Read-only | No | Fetches network inclusion fee statistics |
+| `flushFeeStatsCache()` | Read-only | No | Flushes the in-memory fee stats cache |
+| `previewFee(method, args, options?)` | Read-only | No | Simulates a method to estimate Soroban resource fees |
+| `buildTransaction(method, args, source?)` | Read-only | Yes | Builds an unsigned transaction for custom signing |
+| `buildSep7SigningUri(...)` | Read-only | Yes | Generates a SEP-7 URI for mobile wallet signing |
+| `waitForTransaction(txHash, options?)` | Read-only | No | Polls RPC transaction status until confirmed |
+| `subscribeToEvents(listener, options?)` | Read-only | No | Subscribes to contract events via WebSocket or polling |
+| `reportError(error)` | Read-only | No | Generates a structured error report for diagnostics |
+| `refreshSpec(options?)` | Read-only | No | Clears and re-fetches the contract specification |
+| `destroy()` | Read-only | No | Cleans up subscriptions, queues, and background timers |
+| `createWill(will)` | Write | Yes | Creates a new will and locks initial balance on ledger |
+| `checkIn(willId)` | Write | Yes | Resets will countdown timer on ledger |
+| `emergencyCheckIn(willId, ...)` | Write | Yes | Emergency check-in with guardian signature verification |
+| `triggerWill(willId)` | Write | Yes | Triggers a will when grace period expires |
+| `guardianTrigger(willId)` | Write | Yes | Casts a guardian vote to release will balance |
+| `releaseInheritance(willId)` | Write | Yes | Releases inheritance to beneficiaries |
+| `cancelWill(willId)` | Write | Yes | Cancels will and returns remaining balance to owner |
+| `updateBeneficiaries(willId, ...)` | Write | Yes | Updates beneficiary list and allocations |
+| `topUp(willId, amount)` | Write | Yes | Deposits additional funds into will balance |
+| `batch(operations)` | Write | Yes | Submits contract operations atomically |
+| `submitSignedTransaction(signedTxXdr)` | Write | Yes | Submits a pre-signed transaction to the network |
+
 ### Custom signing flow (advanced)
 
 For applications that need custom signing logic (e.g. multi-sig, custom key derivation), the following `SoroWillClient` instance methods support building and submitting transactions step-by-step:
@@ -543,6 +578,7 @@ For applications that need custom signing logic (e.g. multi-sig, custom key deri
 | `LocalStorageCachePersistenceAdapter` | class | `cache` | Persistence adapter backed by `window.localStorage` |
 | `IndexedDbCachePersistenceAdapter` | class | `cache` | Persistence adapter backed by IndexedDB |
 | `createReadCacheKey` | function | `cache` | Builds a stable cache key from a method name and its arguments |
+| `escapeKeyComponent` | function | `cache` | Escapes special characters and separators in component IDs for collision-free cache keys |
 
 ### Hooks
 
@@ -670,6 +706,7 @@ Notes:
 | `SoroWillRestoreRequiredError` | class | `errors` | The contract entry needs a ledger restore before it can be invoked |
 | `InvalidPaginationOptionsError` | class | `errors` | The supplied pagination options are invalid |
 | `InvalidDayCountError` | class | `errors` | The supplied day count is invalid |
+| `InvalidGuardianSignatureError` | class | `errors` | The supplied guardian signature is empty or malformed |
 | `mapContractError` | function | `errors` | Maps a raw Soroban error into the appropriate typed subclass |
 
 ### RPC

@@ -106,10 +106,29 @@ function stableStringify(value: unknown): string {
 }
 
 /**
+ * Escapes special characters (such as colons, slashes, percent signs, and separators)
+ * in a cache key component to prevent cache key collisions when component IDs contain
+ * separators.
+ *
+ * @param component - The raw string component (e.g. method name or identifier)
+ * @returns The escaped component safe for use in cache keys
+ */
+export function escapeKeyComponent(component: string): string {
+  return encodeURIComponent(component);
+}
+
+/**
+ * Alias for {@link escapeKeyComponent}.
+ */
+export const escapeCacheKeyComponent = escapeKeyComponent;
+
+/**
  * Builds a locale-agnostic cache key for a read method.
  *
  * Cache key design:
- * - Keys are derived ONLY from the method name and its non-locale arguments.
+ * - Keys are derived from the escaped method name and its stably serialized arguments.
+ * - Special characters in component IDs (such as colons and separators) are escaped
+ *   via {@link escapeKeyComponent} to prevent cache key collisions.
  * - Locale-dependent inputs (e.g. `locale`, `language`, `i18n`) are stripped
  *   before serialization so the same underlying data maps to a single key
  *   regardless of the active language.
@@ -117,10 +136,10 @@ function stableStringify(value: unknown): string {
  *   applied AFTER retrieving the cached value, never before caching it.
  *
  * This guarantees that switching languages mid-app does not return stale data
- * formatted for the previous locale.
+ * formatted for the previous locale and eliminates collision vulnerabilities.
  */
 export function createReadCacheKey(method: string, args: Record<string, unknown>): string {
-  return `${method}:${stableStringify(args)}`;
+  return `${escapeKeyComponent(method)}:${stableStringify(args)}`;
 }
 
 /**

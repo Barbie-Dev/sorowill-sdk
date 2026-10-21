@@ -100,10 +100,28 @@ export class SoroWillInvalidAmountError extends SoroWillError {
 /** Raised when an RPC call exceeds its configured deadline. */
 export class RequestTimeoutError extends SoroWillError {
   readonly timeoutMs: number;
+  /** The name of the method or operation that timed out, if known. */
+  readonly method?: string | undefined;
+  /** The operation name that timed out, alias for {@link method}. */
+  readonly operation?: string | undefined;
 
-  constructor(timeoutMs: number, options?: ErrorOptions) {
-    super(`SoroWill RPC request timed out after ${timeoutMs}ms`, options);
+  constructor(
+    timeoutMs: number,
+    methodOrOptions?: string | ErrorOptions,
+    options?: ErrorOptions,
+  ) {
+    const method = typeof methodOrOptions === 'string' ? methodOrOptions : undefined;
+    const errOptions =
+      typeof methodOrOptions === 'object' && methodOrOptions !== null
+        ? methodOrOptions
+        : options;
+    const message = method
+      ? `SoroWill RPC request for "${method}" timed out after ${timeoutMs}ms`
+      : `SoroWill RPC request timed out after ${timeoutMs}ms`;
+    super(message, errOptions);
     this.timeoutMs = timeoutMs;
+    this.method = method;
+    this.operation = method;
   }
 }
 
@@ -390,6 +408,24 @@ export class GuardianValidationError extends SoroWillError {
     this.name = new.target.name;
     this.reason = reason;
     this.guardian = guardian;
+  }
+}
+
+/**
+ * Raised when a guardian signature provided to `emergencyCheckIn` or guardian operations
+ * is invalid: empty, malformed, incorrect length, or not a valid Ed25519 or DecoratedSignature format.
+ */
+export class InvalidGuardianSignatureError extends SoroWillError {
+  readonly signature?: string | undefined;
+
+  constructor(signature?: string, message?: string, options?: ErrorOptions) {
+    super(
+      message ??
+        `Invalid guardian signature: signature must not be empty and must be a valid 64-byte Ed25519 signature or decorated signature.`,
+      options,
+    );
+    this.name = new.target.name;
+    this.signature = signature;
   }
 }
 

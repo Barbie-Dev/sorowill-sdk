@@ -61,6 +61,7 @@ interface PendingRequest<T> {
   abortListener: (() => void) | undefined;
   priority: RequestPriority;
   enqueuedAt: number;
+  method: string | undefined;
 }
 
 /**
@@ -126,7 +127,13 @@ export class RequestQueue {
     }
   }
 
-  enqueue<T>(run: () => Promise<T>, timeoutMs?: number, signal?: AbortSignal, priority: RequestPriority = RequestPriority.Normal): Promise<T> {
+  enqueue<T>(
+    run: () => Promise<T>,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    priority: RequestPriority = RequestPriority.Normal,
+    method?: string,
+  ): Promise<T> {
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       return Promise.reject(new RangeError('timeoutMs must be greater than zero'));
     }
@@ -140,7 +147,17 @@ export class RequestQueue {
       return Promise.reject(new RequestQueueOverflowError(this.core.maxQueueSize));
     }
     return new Promise<T>((resolve, reject) => {
-      const request: PendingRequest<T> = { run, resolve, reject, timeoutMs, signal, abortListener: undefined, priority, enqueuedAt: Date.now() };
+      const request: PendingRequest<T> = {
+        run,
+        resolve,
+        reject,
+        timeoutMs,
+        signal,
+        abortListener: undefined,
+        priority,
+        enqueuedAt: Date.now(),
+        method,
+      };
       if (signal) {
         request.abortListener = () => {
           // Drop the request from the queue so an aborted request never runs.
@@ -258,7 +275,13 @@ export class RequestQueue {
               request.run(),
               new Promise<never>((_, reject) => {
                 timer = setTimeout(
-                  () => reject(new RequestTimeoutError(request.timeoutMs as number)),
+                  () =>
+                    reject(
+                      new RequestTimeoutError(
+                        request.timeoutMs as number,
+                        request.method,
+                      ),
+                    ),
                   request.timeoutMs,
                 );
               }),
