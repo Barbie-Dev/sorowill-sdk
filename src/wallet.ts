@@ -10,6 +10,56 @@ export class WalletSessionError extends Error {
 }
 
 /**
+ * Union of the typed errors a {@link WalletAdapter} implementation — or the
+ * SDK itself on the adapter's behalf — can raise (#524).
+ *
+ * Every adapter method documents which of these it may throw. Adapters may
+ * additionally throw a plain `Error` carrying a wallet-reported message (for
+ * example, "user rejected the request"), since third-party wallet libraries
+ * surface their failures that way; use the type guards below to distinguish
+ * the SDK-typed errors from such wallet-reported failures.
+ *
+ * Transport-specific adapters may raise additional errors (e.g.
+ * `WalletConnectTimeoutError` from the WalletConnect transport); those are
+ * documented on the respective adapter classes.
+ */
+export type WalletAdapterError =
+  /** Session token could not be read, refreshed, or is still invalid. */
+  | WalletSessionError
+  /** The wallet's `signTransaction` did not resolve within the allowed time. */
+  | SignTransactionTimeoutError
+  /** The wallet is connected to a different network than the client expects. */
+  | WalletNetworkMismatchError
+  /** Freighter's presence could not be determined due to an internal error. */
+  | FreighterInstallCheckError;
+
+/** Type guard for {@link WalletSessionError}. */
+export function isWalletSessionError(error: unknown): error is WalletSessionError {
+  return error instanceof WalletSessionError;
+}
+
+/** Type guard for {@link SignTransactionTimeoutError}. */
+export function isSignTransactionTimeoutError(
+  error: unknown,
+): error is SignTransactionTimeoutError {
+  return error instanceof SignTransactionTimeoutError;
+}
+
+/** Type guard for {@link WalletNetworkMismatchError}. */
+export function isWalletNetworkMismatchError(
+  error: unknown,
+): error is WalletNetworkMismatchError {
+  return error instanceof WalletNetworkMismatchError;
+}
+
+/** Type guard for {@link FreighterInstallCheckError}. */
+export function isFreighterInstallCheckError(
+  error: unknown,
+): error is FreighterInstallCheckError {
+  return error instanceof FreighterInstallCheckError;
+}
+
+/**
  * Represents a wallet session token used for transaction signing.
  */
 export interface WalletSession {
@@ -157,17 +207,25 @@ export function extractSignedEnvelopeXdr(response: unknown): string {
   );
 }
 
+/** Options passed to {@link WalletAdapter.signTransaction}. */
+export interface SignTransactionOptions {
+  networkPassphrase: string;
+  timeoutMs?: number;
+}
+
 /**
  * The full capability set a Stellar wallet must expose for
  * {@link SoroWillClient} to read the connected account and sign transactions.
  *
- * Any wallet — Freighter, Albedo, xBull, Rabet, Lobstr, etc. — can be plugged
- * into the client by implementing this interface. {@link FreighterWalletAdapter}
- * is the default implementation, backed by the Freighter browser extension.
- */
-/**
- * The full capability set a Stellar wallet must expose for
- * {@link SoroWillClient} to read the connected account and sign transactions.
+ * ### Error contract (#524)
+ *
+ * Methods document the typed errors they may raise via `@throws`, all of
+ * which are members of the {@link WalletAdapterError} union. Use the
+ * accompanying type guards (`isWalletSessionError`,
+ * `isSignTransactionTimeoutError`, `isWalletNetworkMismatchError`,
+ * `isFreighterInstallCheckError`) to narrow an unknown failure. Adapters may
+ * additionally reject with a plain `Error` whose message comes from the
+ * wallet itself (e.g. the user dismissed the approval prompt).
  *
  * Any wallet — Freighter, Albedo, xBull, Rabet, Lobstr, etc. — can be plugged
  * into the client by implementing this interface. The module-level
@@ -184,8 +242,8 @@ export function extractSignedEnvelopeXdr(response: unknown): string {
  * ### Scripts, automation, and testing — `KeypairSigner`
  *
  * For Node.js scripts, keeper bots, demo scripts, or unit tests where there is
- * no browser extension available, build a lightweight adapter directly on top
- * of `@stellar/stellar-sdk`'s `Keypair`:
+ * no browser extension available, build a lightweight adapter on top of
+ * `@stellar/stellar-sdk`'s `Keypair`:
  *
  * ```ts
  * import { Keypair, Transaction, TransactionBuilder } from '@stellar/stellar-sdk';
@@ -224,31 +282,81 @@ export function extractSignedEnvelopeXdr(response: unknown): string {
  * > to handle real end-user funds in a browser or any environment where the
  * > secret could be exposed to untrusted code.
  */
-export interface SignTransactionOptions {
-  networkPassphrase: string;
-  timeoutMs?: number;
-}
-
 export interface WalletAdapter {
+  /**
+   * Reports whether the wallet is currently connected.
+   *
+   * @throws {FreighterInstallCheckError} When the wallet's presence cannot be
+   *   determined due to an internal error (Freighter only; other adapters may
+   *   throw a plain `Error` instead).
+   */
   isConnected(): Promise<boolean>;
+  /**
+   * Prompts the user (if required) and establishes a connection.
+   *
+   * @throws {WalletNetworkMismatchError} When the wallet is connected to a
+   *   network that differs from the client's expected network passphrase.
+   * @throws {Error} When the user rejects the connection or the wallet reports
+   *   an internal failure.
+   */
   connect(): Promise<WalletConnection>;
+  /**
+   * Re-establishes a previous connection without re-prompting the user where
+   * possible.
+   *
+   * @throws {WalletNetworkMismatchError} When the wallet is connected to a
+   *   network that differs from the client's expected network passphrase.
+   * @throws {Error} When reconnection fails or the session can no longer be
+   *   restored.
+   */
   reconnect(): Promise<WalletConnection>;
+  /**
+   * Tears down the current connection and clears any local session state.
+   *
+   * @throws {Error} When the wallet reports a failure while disconnecting.
+   */
   disconnect(): Promise<void>;
+  /**
+   * Returns the public key of the currently connected account.
+   *
+   * @throws {Error} When no account is connected or the wallet reports an
+   *   internal failure.
+   */
   getPublicKey(): Promise<string>;
+  /**
+   * Signs a transaction envelope, returning either the signed XDR string or a
+   * {@link SignatureResponse} object carrying `envelope_xdr`.
+   *
+   * @throws {SignTransactionTimeoutError} When the wallet does not respond
+   *   within `opts.timeoutMs` (e.g. a dismissed or hung approval popup).
+   * @throws {WalletSessionError} When the adapter issues session tokens and
+   *   the current token is expired and cannot be refreshed.
+   * @throws {Error} When the wallet rejects the request (e.g. the user
+   *   declined to sign) or returns a malformed response.
+   */
   signTransaction(
     transactionXdr: string,
     opts: SignTransactionOptions,
   ): Promise<string | SignatureResponse>;
-  /** Reports the network this wallet is currently set to, without prompting the user. Optional — not every wallet adapter can report this. */
+  /**
+   * Reports the network this wallet is currently set to, without prompting the user. Optional — not every wallet adapter can report this.
+   *
+   * @throws {Error} When the wallet cannot report its current network.
+   */
   getNetwork?(): Promise<{ network: string; networkPassphrase: string }>;
   /**
    * Returns the current session token for this wallet, if the adapter issues
    * one. Optional — adapters that do not use session tokens may omit it.
+   *
+   * @throws {WalletSessionError} When the session cannot be read.
    */
   getSession?(): Promise<WalletSession | undefined>;
   /**
    * Refreshes an expired/invalid session token and returns the new one.
    * Optional — only meaningful for adapters that issue session tokens.
+   *
+   * @throws {WalletSessionError} When the session cannot be refreshed or the
+   *   refreshed token is still invalid.
    */
   refreshSession?(): Promise<WalletSession>;
 }

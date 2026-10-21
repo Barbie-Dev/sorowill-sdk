@@ -79,7 +79,18 @@ export {
   getDefaultWalletAdapter,
   getPublicKey,
   isFreighterInstalled,
+  isFreighterInstallCheckError,
+  isSignTransactionTimeoutError,
+  isWalletNetworkMismatchError,
+  isWalletSessionError,
   signTransaction,
+  WalletSessionError,
+} from './wallet';
+export type {
+  WalletAdapter,
+  WalletAdapterError,
+  WalletConnection,
+  WalletSession,
 } from './wallet';
 export type { WalletAdapter, WalletConnection, WalletSessionOptions } from './wallet';
 
@@ -130,6 +141,7 @@ export {
   ConfirmationWindowExpiredError,
   DuplicateBeneficiaryError,
   DuplicateGuardianError,
+  DuplicateOperationError,
   ExorbitantFeeError,
   FixedAmountExceedsBalanceError,
   FreighterInstallCheckError,
@@ -163,6 +175,7 @@ export {
   NotSameOwnerError,
   OwnerCannotBeGuardianError,
   RequestTimeoutError,
+  RequestQueueOverflowError,
   SameWillIdError,
   SignTransactionTimeoutError,
   SimulationError,
@@ -196,6 +209,7 @@ export {
 export type { ContractErrorFactory } from './errors';
 
 export {
+  DEFAULT_MAX_QUEUE_SIZE,
   RequestQueue,
   RequestPriority,
   getSharedRequestQueue,

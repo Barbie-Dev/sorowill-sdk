@@ -908,6 +908,10 @@ Read methods are cached in memory by default. You can disable caching with `read
 
 If you already have a contract event stream, pass it as `eventSource` and cached will reads will be invalidated automatically when matching will events arrive.
 
+### `getWill` caching and expected call frequency
+
+`client.getWill(willId)` is cached per will id (default TTL: 60 seconds), so it is safe to call repeatedly — from UI renders, polling intervals, or event handlers. Each distinct `willId` performs at most one RPC read per TTL window; later calls within the TTL are served from the cache. Configure the TTL with `readCache: { ttlMs: number }`, force a fresh read with `readCache: false`, or invalidate a specific will's cache entries with `client`'s underlying `readCache.invalidateByWillId(willId)` / an `eventSource`.
+
 ## Architecture
 
 ### Lazy spec-fetch-and-cache

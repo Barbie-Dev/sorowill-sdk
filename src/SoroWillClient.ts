@@ -326,6 +326,13 @@ export interface SoroWillClientOptions {
   maxConcurrentRequests?: number;
   /** Maximum RPC requests started in a rolling one-second window. Defaults to 10. */
   requestsPerSecond?: number;
+  /**
+   * Maximum number of RPC requests allowed to wait in the client's request
+   * queue at once. Defaults to 1000. Requests enqueued while the queue is
+   * full are rejected with a `RequestQueueOverflowError` instead of growing
+   * the queue without bound (#525).
+   */
+  maxQueueSize?: number;
   /** Optional list of RPC endpoints to use with automatic failover. */
   rpcUrls?: string[];
   /**
@@ -403,6 +410,16 @@ interface RawWill {
 }
 
 const DEFAULT_POLL_ATTEMPTS = 30;
+
+/**
+ * Contract methods for which two concurrent invocations targeting the same
+ * will must never both be submitted — each would send its own transaction
+ * on-chain. Invocations of these methods are registered through
+ * {@link InFlightTracker.trackExclusive}, so a duplicate arriving while the
+ * first is still in flight is rejected with a `DuplicateOperationError`
+ * instead of silently issuing a second transaction (#523).
+ */
+const EXCLUSIVE_INVOKE_METHODS: ReadonlySet<string> = new Set(['check_in']);
 
 /**
  * How long `subscribeToEvents` waits for a WebSocket to fire `onopen` before
@@ -788,6 +805,9 @@ export class SoroWillClient {
       ...(options.requestsPerSecond === undefined
         ? {}
         : { requestsPerSecond: options.requestsPerSecond }),
+      ...(options.maxQueueSize === undefined
+        ? {}
+        : { maxQueueSize: options.maxQueueSize }),
     });
     this.inFlightTracker =
       options.inFlightTracker ??
@@ -2283,9 +2303,18 @@ export class SoroWillClient {
     }
     };
 
-    return willId === undefined
-      ? run()
-      : this.inFlightTracker.track(willId, method, run) as Promise<{
+    if (willId === undefined) {
+      return run();
+    }
+    // Some state-changing methods must never run two concurrent invocations
+    // for the same will: a duplicate would submit a second transaction
+    // on-chain. Those are routed through trackExclusive so the duplicate is
+    // rejected with a DuplicateOperationError instead of being coalesced
+    // onto the in-flight promise (#523).
+    const tracked = EXCLUSIVE_INVOKE_METHODS.has(method)
+      ? this.inFlightTracker.trackExclusive(willId, method, run)
+      : this.inFlightTracker.track(willId, method, run);
+    return tracked as Promise<{
           txHash: string;
           createdAt: number;
           returnValue: ScVal | undefined;

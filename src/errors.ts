@@ -108,6 +108,55 @@ export class RequestTimeoutError extends SoroWillError {
 }
 
 /**
+ * Raised when a {@link RequestQueue} is asked to enqueue a request beyond its
+ * configured maximum queue size (`maxQueueSize`). The excess request is
+ * rejected without ever being scheduled, so the queue can never grow without
+ * bound when requests are produced faster than the configured concurrency and
+ * rate limits allow them to be processed (#525).
+ */
+export class RequestQueueOverflowError extends SoroWillError {
+  /** The configured maximum number of pending requests that was exceeded. */
+  readonly maxQueueSize: number;
+
+  constructor(maxQueueSize: number, options?: ErrorOptions) {
+    super(
+      `RequestQueue is full: cannot enqueue more than ${maxQueueSize} pending requests. ` +
+        'The queue is processing requests slower than they are being submitted. ' +
+        'Retry shortly, reduce the submission rate, or increase the queue\'s maxQueueSize / concurrency.',
+      options,
+    );
+    this.maxQueueSize = maxQueueSize;
+  }
+}
+
+/**
+ * Raised when an operation is submitted while an identical operation (same
+ * will id and method) is already in flight and the caller asked for exclusive
+ * execution. Unlike the default deduplication behaviour — which coalesces
+ * concurrent duplicates onto the in-flight promise — exclusive operations
+ * reject the duplicate immediately so it can never issue a second, duplicate
+ * transaction on-chain (#523). The original in-flight operation is unaffected
+ * and continues to completion.
+ */
+export class DuplicateOperationError extends SoroWillError {
+  /** The will id whose operation was already in flight. */
+  readonly willId: string;
+  /** The contract method that was already in flight for {@link willId}. */
+  readonly method: string;
+
+  constructor(willId: string | bigint, method: string, options?: ErrorOptions) {
+    const id = typeof willId === 'bigint' ? willId.toString() : willId;
+    super(
+      `A "${method}" operation for will ${id} is already in flight. ` +
+        'Wait for the in-flight operation to settle before submitting another one.',
+      options,
+    );
+    this.willId = id;
+    this.method = method;
+  }
+}
+
+/**
  * Raised when Freighter's `isConnected()` API reports an error other than
  * the extension simply being absent — e.g. it was called outside a browser,
  * or Freighter itself hit an internal error. Distinguishing this from "not

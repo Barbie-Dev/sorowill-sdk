@@ -1,4 +1,11 @@
-import { RequestTimeoutError } from './errors';
+import { RequestQueueOverflowError, RequestTimeoutError } from './errors';
+
+/**
+ * Default cap on the number of requests that may be waiting in the queue at
+ * once. Requests beyond this limit are rejected with a
+ * {@link RequestQueueOverflowError} instead of accumulating without bound (#525).
+ */
+export const DEFAULT_MAX_QUEUE_SIZE = 1_000;
 
 /**
  * Rate and concurrency controls used by the client's shared RPC request queue.
@@ -19,6 +26,13 @@ export interface RequestQueueOptions {
    * may still be delayed if the rate limit has been exhausted.
    */
   requestsPerSecond?: number;
+  /**
+   * Maximum number of requests allowed to wait in the queue at once. Defaults
+   * to 1000. When the queue is full, further {@link RequestQueue.enqueue}
+   * calls are rejected with a {@link RequestQueueOverflowError} instead of
+   * growing the queue without bound (#525).
+   */
+  maxQueueSize?: number;
   /**
    * Optional account key. When provided, all {@link RequestQueue} instances
    * created with the same key share a single underlying queue, so operations
@@ -57,15 +71,17 @@ interface PendingRequest<T> {
 class QueueCore {
   readonly maxConcurrent: number;
   readonly requestsPerSecond: number;
+  readonly maxQueueSize: number;
   readonly pending: Array<PendingRequest<unknown>> = [];
   readonly starts: number[] = [];
   active = 0;
   wakeTimer: ReturnType<typeof setTimeout> | undefined;
   refCount = 0;
 
-  constructor(maxConcurrent: number, requestsPerSecond: number) {
+  constructor(maxConcurrent: number, requestsPerSecond: number, maxQueueSize: number) {
     this.maxConcurrent = maxConcurrent;
     this.requestsPerSecond = requestsPerSecond;
+    this.maxQueueSize = maxQueueSize;
   }
 }
 
@@ -86,23 +102,27 @@ export class RequestQueue {
   constructor(options: RequestQueueOptions = {}) {
     const maxConcurrent = options.maxConcurrent ?? 4;
     const requestsPerSecond = options.requestsPerSecond ?? 10;
+    const maxQueueSize = options.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
     if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
       throw new RangeError('maxConcurrent must be a positive integer');
     }
     if (!Number.isInteger(requestsPerSecond) || requestsPerSecond < 1) {
       throw new RangeError('requestsPerSecond must be a positive integer');
     }
+    if (!Number.isInteger(maxQueueSize) || maxQueueSize < 1) {
+      throw new RangeError('maxQueueSize must be a positive integer');
+    }
     this.account = options.account;
     if (this.account !== undefined) {
       let core = sharedCores.get(this.account);
       if (core === undefined) {
-        core = new QueueCore(maxConcurrent, requestsPerSecond);
+        core = new QueueCore(maxConcurrent, requestsPerSecond, maxQueueSize);
         sharedCores.set(this.account, core);
       }
       core.refCount += 1;
       this.core = core;
     } else {
-      this.core = new QueueCore(maxConcurrent, requestsPerSecond);
+      this.core = new QueueCore(maxConcurrent, requestsPerSecond, maxQueueSize);
     }
   }
 
@@ -112,6 +132,12 @@ export class RequestQueue {
     }
     if (signal?.aborted) {
       return Promise.reject(signal.reason);
+    }
+    // Enforce the queue size cap (#525): when requests are produced faster
+    // than concurrency + rate limits allow them to start, reject the excess
+    // immediately rather than letting the pending list grow without bound.
+    if (this.core.pending.length >= this.core.maxQueueSize) {
+      return Promise.reject(new RequestQueueOverflowError(this.core.maxQueueSize));
     }
     return new Promise<T>((resolve, reject) => {
       const request: PendingRequest<T> = { run, resolve, reject, timeoutMs, signal, abortListener: undefined, priority, enqueuedAt: Date.now() };
