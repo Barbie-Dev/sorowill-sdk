@@ -25,6 +25,27 @@ export interface ParseSep7CallbackOptions {
 }
 
 const SEP7_MAX_MESSAGE_LENGTH = 300;
+/**
+ * Maximum decoded transaction-envelope size accepted by {@link buildSep7TxUri}.
+ *
+ * SEP-7 URIs are scanned as QR codes / opened as deeplinks, so oversized
+ * envelopes fail in wallets even when the URI itself is well-formed. Stellar
+ * envelopes are small (a typical payment is ~200 bytes); 1 KiB of headroom
+ * keeps normal flows working while rejecting pathological payloads early
+ * with a clear SDK error instead of a silent wallet failure.
+ *
+ * @since 0.1.2
+ */
+export const SEP7_MAX_ENVELOPE_BYTES = 1024;
+/**
+ * Maximum length (in characters) of the final `web+stellar:tx?...` URI string
+ * produced by {@link buildSep7TxUri}. QR scanners, mobile deeplink handlers,
+ * and browsers impose their own (much larger) limits, but a conservative cap
+ * here fails fast with an actionable message.
+ *
+ * @since 0.1.2
+ */
+export const SEP7_MAX_URI_LENGTH = 2048;
 const SEP7_FAILURE_STATUSES = new Set([
   'error',
   'fail',
@@ -98,6 +119,28 @@ export function buildSep7TxUri(transactionXdr: string, options: BuildSep7TxUriOp
     throw new Error('SEP-7 transaction XDR is required');
   }
 
+  const trimmedXdr = transactionXdr.trim();
+  // Validate the decoded envelope size so oversized payloads fail fast with a
+  // clear SDK error instead of producing a URI that wallets/QR scanners reject.
+  // Non-base64 input is left to downstream XDR parsing; only measurable,
+  // decodable envelopes are size-checked here.
+  let envelopeBytes = -1;
+  try {
+    const decoded =
+      typeof Buffer !== 'undefined'
+        ? Buffer.from(trimmedXdr, 'base64')
+        : Uint8Array.from(atob(trimmedXdr), (c) => c.charCodeAt(0));
+    envelopeBytes = decoded.length;
+  } catch {
+    envelopeBytes = -1;
+  }
+  if (envelopeBytes >= 0 && envelopeBytes > SEP7_MAX_ENVELOPE_BYTES) {
+    throw new Error(
+      `SEP-7 transaction envelope is too large (${envelopeBytes} bytes exceeds the ${SEP7_MAX_ENVELOPE_BYTES}-byte limit); ` +
+        'reduce the transaction size (fewer operations/memos) before building a SEP-7 URI',
+    );
+  }
+
   if (options.callbackUrl.trim().length === 0) {
     throw new Error('SEP-7 callback URL is required');
   }
@@ -148,7 +191,14 @@ export function buildSep7TxUri(transactionXdr: string, options: BuildSep7TxUriOp
     params.set('origin_domain', options.originDomain);
   }
 
-  return `web+stellar:tx?${encodeSep7Params(params)}`;
+  const uri = `web+stellar:tx?${encodeSep7Params(params)}`;
+  if (uri.length > SEP7_MAX_URI_LENGTH) {
+    throw new Error(
+      `SEP-7 URI is too large (${uri.length} characters exceeds the ${SEP7_MAX_URI_LENGTH}-character limit); ` +
+        'reduce the transaction envelope size or shorten optional fields (message, callback URL) before building a SEP-7 URI',
+    );
+  }
+  return uri;
 }
 
 export function parseSep7Callback(

@@ -250,17 +250,27 @@ export const MAX_BENEFICIARIES = 10;
 /**
  * Maximum number of guardians the SoroWill contract allows per will.
  *
- * **IMPORTANT**: This value mirrors the `MAX_GUARDIANS` constant in the
- * contract's `contracts/will/src/lib.rs` and must be kept in sync manually until the
- * contracts repo ships automated spec-drift tooling (issue #122).
+ * Matches `MAX_GUARDIANS` (value `3`) in the contract's
+ * `contracts/will/src/lib.rs` — see
+ * {@link https://github.com/SoroWill/sorowill-contracts/blob/main/contracts/will/src/lib.rs}
+ * Kept in sync manually until the contracts repo ships automated spec-drift
+ * tooling (issue #122).
  */
 export const MAX_GUARDIANS = 3;
 
 /**
+ * Tolerance for floating-point percentage sums. Because binary floating-point
+ * arithmetic can produce results like `99.99999999999999` instead of `100`,
+ * we treat the sum as valid when it is within `EPSILON` of 100.
+ */
+export const PERCENTAGE_SUM_EPSILON = 1e-9;
+
+/**
  * Validates that a beneficiary list is well-formed: non-empty, at most
  * {@link MAX_BENEFICIARIES} entries, no duplicate addresses (compared
- * case-insensitively), every percentage is a positive integer, and
- * percentages sum to exactly 100.
+ * case-insensitively), every percentage is a positive number, and
+ * percentages sum to 100 (within {@link PERCENTAGE_SUM_EPSILON} to tolerate
+ * binary floating-point rounding).
  *
  * Percentages are on the SDK's 0-100 scale. `SoroWillClient` scales them to
  * the contract's basis points (summing to 10,000) when it submits a
@@ -279,29 +289,28 @@ export function validateBeneficiaries(beneficiaries: readonly Beneficiary[]): bo
   if (!beneficiaries.every((b) => StrKey.isValidEd25519PublicKey(b.address))) {
     return false;
   }
-  if (hasDuplicateBeneficiaries(beneficiaries)) {
-    return false;
-  }
-  if (!beneficiaries.every((b) => Number.isInteger(b.percentage) && b.percentage > 0)) {
+  if (!beneficiaries.every((b) => typeof b.percentage === 'number' && b.percentage > 0)) {
     return false;
   }
 
   // Check for duplicate addresses — must come before the percentage sum check
   // so the error message can name the offending address rather than just
-  // reporting an invalid sum.
+  // reporting an invalid sum. Comparison is case-insensitive to match
+  // `hasDuplicateBeneficiaries` and the contract's on-chain check.
   const seen = new Set<string>();
   for (const b of beneficiaries) {
-    if (seen.has(b.address)) {
+    const normalized = b.address.toUpperCase();
+    if (seen.has(normalized)) {
       throw new BeneficiaryValidationError(
         `Duplicate beneficiary address: "${b.address}" appears more than once. ` +
           'Each beneficiary must have a unique Stellar address.',
       );
     }
-    seen.add(b.address);
+    seen.add(normalized);
   }
 
   const sum = beneficiaries.reduce((acc, b) => acc + b.percentage, 0);
-  return sum === 100;
+  return Math.abs(sum - 100) < PERCENTAGE_SUM_EPSILON;
 }
 
 /**
@@ -388,6 +397,9 @@ export function validateGuardians(
   if (!Array.isArray(guardians)) {
     return false;
   }
+  if (guardians.length > MAX_GUARDIANS) {
+    return false;
+  }
 
   for (const guardian of guardians) {
     if (!StrKey.isValidEd25519PublicKey(guardian)) {
@@ -421,4 +433,44 @@ export function formatTokenAmount(
 ): string {
   const bigIntValue = typeof stroops === 'bigint' ? stroops : BigInt(stroops);
   return formatUSDC(bigIntValue, decimals);
+}
+
+/**
+ * Recursively freezes `value` and all of its nested objects so that any
+ * subsequent mutation attempt throws (in strict mode) or silently fails
+ * (in sloppy mode).
+ *
+ * Use this to enforce immutability guarantees on SDK-returned objects so
+ * callers cannot accidentally mutate internal SDK state by modifying a
+ * returned `Will`, `Beneficiary`, or similar value object.
+ *
+ * Only plain objects, arrays, and `Date` instances are traversed. Other
+ * values (primitives, class instances, etc.) are left as-is.
+ *
+ * @example
+ * ```ts
+ * import { deepFreezeObject } from '@sorowill/sdk';
+ *
+ * const will = deepFreezeObject(await client.getWill('1'));
+ * will.balance = '999999'; // TypeScript error at runtime: cannot assign to read-only property
+ * ```
+ */
+export function deepFreezeObject<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  // Freeze plain objects and arrays recursively.
+  if (typeof value === 'object') {
+    Object.freeze(value);
+
+    for (const key of Object.keys(value)) {
+      const child = (value as Record<string, unknown>)[key];
+      if (child !== null && typeof child === 'object' && !Object.isFrozen(child)) {
+        deepFreezeObject(child);
+      }
+    }
+  }
+
+  return value;
 }

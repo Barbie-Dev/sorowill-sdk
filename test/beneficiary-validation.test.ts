@@ -121,7 +121,7 @@ vi.mock('@stellar/stellar-sdk', async () => {
 });
 
 import { SoroWillClient } from '../src/SoroWillClient';
-import { BeneficiaryValidationError, SoroWillError } from '../src/errors';
+import { BeneficiaryValidationError, SoroWillError, WillNotFoundError } from '../src/errors';
 import { FreighterWalletAdapter } from '../src/wallet';
 
 const VALID_BENEFICIARIES = [
@@ -209,14 +209,36 @@ describe('createWill — beneficiary validation fast-fail', () => {
     ).rejects.toThrow(BeneficiaryValidationError);
   });
 
-  it('throws BeneficiaryValidationError for a fractional percentage', async () => {
+  it('accepts fractional percentages that sum to 100 (e.g. 33.5 + 66.5)', async () => {
     const client = makeClient();
+    freighterApiMock.signTransaction.mockResolvedValue({ envelope_xdr: 'SIGNED_XDR', error: undefined });
+    mockState.sendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'TXHASH' });
+    // The mock Spec's funcResToNative is the identity function, so the return
+    // value must already be the decoded will id (a bigint).
+    mockState.pollTransaction.mockResolvedValue({
+      status: 'SUCCESS',
+      createdAt: 1_700_000_000,
+      returnValue: 1n,
+    });
     await expect(
       client.createWill({
         ...BASE_CREATE_WILL_PARAMS,
         beneficiaries: [
           { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 33.5 },
           { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 66.5 },
+        ],
+      }),
+    ).resolves.toMatchObject({ willId: '1', txHash: 'TXHASH' });
+  });
+
+  it('rejects fractional percentages that do not sum to 100', async () => {
+    const client = makeClient();
+    await expect(
+      client.createWill({
+        ...BASE_CREATE_WILL_PARAMS,
+        beneficiaries: [
+          { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 33.5 },
+          { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 66.4 },
         ],
       }),
     ).rejects.toThrow(BeneficiaryValidationError);
@@ -282,6 +304,7 @@ describe('updateBeneficiaries — beneficiary validation fast-fail', () => {
     mockState.sendTransaction.mockReset();
     mockState.pollTransaction.mockReset();
     mockState.prepareTransaction.mockClear();
+    mockState.simulateTransaction.mockReset();
     mockState.getContractWasmByContractId.mockClear();
     freighterApiMock.getAddress.mockClear();
   });
@@ -354,6 +377,24 @@ describe('updateBeneficiaries — beneficiary validation fast-fail', () => {
 
   it('does NOT throw for a valid two-beneficiary list summing to 100', async () => {
     freighterApiMock.signTransaction.mockResolvedValue({ envelope_xdr: 'SIGNED_XDR2', error: undefined });
+    mockState.simulateTransaction.mockResolvedValue({
+      result: {
+        retval: {
+          id: 1n,
+          owner: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO',
+          token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
+          balance: 1000000n,
+          beneficiaries: [],
+          checkin_period_days: 90n,
+          grace_period_days: 7n,
+          last_checkin: 1_700_000_000n,
+          status: 'Active',
+          guardians: [],
+          guardian_votes: 0,
+        },
+      },
+      error: undefined,
+    });
     mockState.sendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'TXHASH2' });
     mockState.pollTransaction.mockResolvedValue({
       status: 'SUCCESS',
@@ -363,7 +404,20 @@ describe('updateBeneficiaries — beneficiary validation fast-fail', () => {
 
     const client = makeClient();
     await expect(
-      client.updateBeneficiaries({ willId: '1', beneficiaries: VALID_BENEFICIARIES }),
+      client.updateBeneficiaries({ willId: '1', beneficiaries: VALID_BENEFICIARIES }, { skipExistenceCheck: true }),
     ).resolves.toMatchObject({ txHash: 'TXHASH2' });
+  });
+
+  it('throws WillNotFoundError when the will does not exist', async () => {
+    freighterApiMock.signTransaction.mockResolvedValue({ envelope_xdr: 'SIGNED_XDR3', error: undefined });
+    // getWill's simulation returns a WillNotFound contract error (code 1)
+    mockState.simulateTransaction.mockResolvedValue({ error: 'Error(Contract, #1)' });
+
+    const client = makeClient();
+    await expect(
+      client.updateBeneficiaries({ willId: '999', beneficiaries: VALID_BENEFICIARIES }),
+    ).rejects.toBeInstanceOf(WillNotFoundError);
+    // No transaction should be sent for a non-existent will
+    expect(mockState.sendTransaction).not.toHaveBeenCalled();
   });
 });

@@ -188,14 +188,17 @@ describe('beneficiary percentage -> contract basis points', () => {
       returnValue: undefined,
     });
 
-    await makeClient().updateBeneficiaries({
-      willId: '1',
-      beneficiaries: [
-        { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 33 },
-        { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 33 },
-        { address: 'GDPS7CHKGAWBCTWD4EWZ4MMFG56S4NCALGQOUBMX6DSCUIZFRQHHP3HB', percentage: 34 },
-      ],
-    });
+    await makeClient().updateBeneficiaries(
+      {
+        willId: '1',
+        beneficiaries: [
+          { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 33 },
+          { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 33 },
+          { address: 'GDPS7CHKGAWBCTWD4EWZ4MMFG56S4NCALGQOUBMX6DSCUIZFRQHHP3HB', percentage: 34 },
+        ],
+      },
+      { skipExistenceCheck: true },
+    );
 
     const bound = beneficiariesFor('update_beneficiaries');
     expect(bound).toEqual([
@@ -203,6 +206,28 @@ describe('beneficiary percentage -> contract basis points', () => {
       { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', basis_points: 3300 },
       { address: 'GDPS7CHKGAWBCTWD4EWZ4MMFG56S4NCALGQOUBMX6DSCUIZFRQHHP3HB', basis_points: 3400 },
     ]);
+    expect(bound.reduce((sum, b) => sum + b.basis_points, 0)).toBe(10_000);
+  });
+
+  it('emits integer basis points that sum to 10000 for fractional percentages', async () => {
+    // 8.3 and 1.15 carry binary floating-point artifacts when scaled
+    // (830.0000000000001 and 114.99999999999999); Math.round strips them.
+    await makeClient().createWill({
+      token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
+      amount: '1000000',
+      beneficiaries: [
+        { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 8.3 },
+        { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 1.15 },
+        { address: 'GDPS7CHKGAWBCTWD4EWZ4MMFG56S4NCALGQOUBMX6DSCUIZFRQHHP3HB', percentage: 90.55 },
+      ],
+      checkinPeriodDays: 90,
+      gracePeriodDays: 7,
+      guardians: [],
+    });
+
+    const bound = beneficiariesFor('create_will');
+    expect(bound.map((b) => b.basis_points)).toEqual([830, 115, 9055]);
+    expect(bound.every((b) => Number.isInteger(b.basis_points))).toBe(true);
     expect(bound.reduce((sum, b) => sum + b.basis_points, 0)).toBe(10_000);
   });
 });

@@ -1,3 +1,5 @@
+import { DuplicateOperationError } from './errors';
+
 type OperationKey = string;
 type OperationResult<T> = Promise<T>;
 
@@ -172,6 +174,42 @@ export class InFlightTracker {
 
     this.inFlight.set(key, entry as InFlightOperation<unknown>);
     return entry.promise;
+  }
+
+  /**
+   * Like {@link track}, but rejects the duplicate instead of coalescing it
+   * onto the in-flight promise.
+   *
+   * When an unexpired operation is already in flight for the same
+   * (willId, method) pair, the returned promise rejects with a
+   * {@link DuplicateOperationError} and `operation` is never invoked. This
+   * guarantees that at most one transaction per (willId, method) can be
+   * submitted at a time, even across concurrent callers (#523).
+   *
+   * Expired entries are lazily evicted first, so a stale entry (e.g. an
+   * operation that never settled) cannot block retries forever.
+   *
+   * @throws {DuplicateOperationError} via the returned (rejected) promise when
+   *   an identical operation is already in flight.
+   */
+  trackExclusive<T>(
+    willId: string | bigint,
+    method: string,
+    operation: (signal: AbortSignal) => PromiseLike<T>,
+    clientId?: string,
+  ): Promise<T> {
+    const key = this.getKey(willId, method, clientId);
+
+    const existing = this.inFlight.get(key);
+    if (existing) {
+      if (!this.isExpired(existing)) {
+        return Promise.reject(new DuplicateOperationError(willId, method));
+      }
+      // Expired entry — evict and start a fresh operation.
+      this.evict(key, existing);
+    }
+
+    return this.track(willId, method, operation, clientId);
   }
 
   /**

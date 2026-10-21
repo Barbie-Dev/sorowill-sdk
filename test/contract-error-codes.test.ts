@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AlreadyClaimedError,
   BeneficiaryNotFoundError,
@@ -19,8 +19,10 @@ import {
   NotSameOwnerError,
   OwnerCannotBeGuardianError,
   SameWillIdError,
+  SoroWillError,
   TooManyIdsError,
   TooManyWillsError,
+  UnknownContractErrorCodeError,
   WillContractError,
   WillNotBothActiveError,
   WillNotConfirmedError,
@@ -83,5 +85,33 @@ describe('mapContractError — contract error codes 13-37', () => {
       const member = name.replace(/Error$/, '');
       expect(WillErrorCode[member as keyof typeof WillErrorCode]).toBe(code);
     }
+  });
+});
+
+describe('mapContractError — unknown contract error codes', () => {
+  it('returns UnknownContractErrorCodeError for an unregistered numeric code', () => {
+    const mapped = mapContractError(new Error('Error(Contract, #99)'));
+    expect(mapped).toBeInstanceOf(UnknownContractErrorCodeError);
+    // UnknownContractErrorCodeError is a generic SoroWillError so callers can
+    // always catch a well-known SDK base class for unregistered codes.
+    expect(mapped).toBeInstanceOf(SoroWillError);
+    expect((mapped as UnknownContractErrorCodeError).code).toBe(99);
+  });
+
+  it('logs a warning for unknown error codes', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const mapped = mapContractError(new Error('Error(Contract, #42)'));
+      expect(mapped).toBeInstanceOf(UnknownContractErrorCodeError);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('returns the original error when no numeric code is found in the text', () => {
+    const original = new Error('Some random contract failure without a code');
+    const mapped = mapContractError(original);
+    expect(mapped).toBe(original);
   });
 });

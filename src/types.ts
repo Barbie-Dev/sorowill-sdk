@@ -88,8 +88,9 @@ export enum WillErrorCode {
  * A single beneficiary entry: an address and the percentage of the will's
  * balance it is entitled to receive when the inheritance is released.
  *
- * `percentage` is on a 0-100 scale (a positive integer), and a will's
- * beneficiary percentages must sum to exactly 100. The SDK converts this to
+ * `percentage` is on a 0-100 scale (a positive number — integers and
+ * reasonable fractional values like `33.33` are both accepted), and a will's
+ * beneficiary percentages must sum to 100. The SDK converts this to
  * the contract's internal basis-point representation (0-10,000, summing to
  * 10,000) when submitting a transaction, so a `percentage` of `30` is bound
  * on-chain as `3000` basis points.
@@ -102,9 +103,40 @@ export enum WillErrorCode {
  *
  * @since 0.1.0
  */
+/**
+ * A single beneficiary of a will, with their Stellar address and percentage
+ * share of the will's balance.
+ *
+ * ## Validation constraints
+ * - `address` must be a valid Stellar public key (StrKey encoded, `G` prefix).
+ *   Use {@link StrKey.isValidEd25519PublicKey} from `@stellar/stellar-sdk` to
+ *   validate client-side before submission.
+ * - `percentage` must be an integer in the range 0–100 (inclusive).
+ * - Across all beneficiaries in a single will, percentages must sum to exactly
+ *   100.
+ *
+ * These constraints are enforced client-side by {@link validateBeneficiaries}
+ * (called by {@link SoroWillClient.createWill} and
+ * {@link SoroWillClient.updateBeneficiaries}) and by the on-chain contract
+ * (error codes {@link WillErrorCode.InvalidPercentage} and
+ * {@link WillErrorCode.InvalidPercentages}).
+ *
+ * @example
+ * ```ts
+ * const beneficiary: Beneficiary = {
+ *   address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG',
+ *   percentage: 60,
+ * };
+ * ```
+ *
+ * @since 0.1.0
+ */
 export interface Beneficiary {
   /**
-   * Stellar address of the beneficiary.
+   * Stellar address of the beneficiary. Must be a valid Ed25519 public key
+   * encoded as a StrKey string (e.g. `GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG`).
+   *
+   * @example 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG'
    * @since 0.1.0
    */
   readonly address: string;
@@ -113,12 +145,15 @@ export interface Beneficiary {
    * whole percentage on the 0–100 scale. All beneficiary percentages in a
    * will must sum to exactly 100.
    *
+   * **Constraint**: must be an integer between 0 and 100 (inclusive).
+   *
    * **Breaking change in 0.1.1:** prior to 0.1.1 this field was named
    * `basisPoints` and stored the raw on-chain value (0–10 000). It was
    * renamed to `percentage` and re-scaled to 0–100 to match the SDK's
    * public semantics. If you stored beneficiary objects from SDK < 0.1.1,
    * divide each saved value by 100 to convert.
    *
+   * @example 60
    * @since 0.1.1
    */
   readonly percentage: number;
@@ -314,9 +349,37 @@ export type TransactionSigner<T = void> = (
 
 /* … truncated 2578 chars — edit only what you need near the top … */
 
+/**
+ * A single contract invocation to be executed as part of a batch.
+ *
+ * ### Networks (#550)
+ *
+ * `network` is optional. When present it declares which Stellar network the
+ * operation is intended for (`'testnet'` or `'mainnet'`). Every operation in
+ * a batch must agree on the same network, and that network must match the
+ * client's configured network:
+ *
+ * - Operations that omit `network` inherit the client's network and are
+ *   therefore always compatible with it.
+ * - If any operation specifies a network that differs from the client's
+ *   network, or if two operations specify *different* networks, the batch is
+ *   rejected with a {@link BatchNetworkMismatchError} before any transaction
+ *   is built, signed, or submitted.
+ *
+ * This prevents a batch from silently mixing testnet and mainnet operations,
+ * which would otherwise fail (or, worse, succeed against the wrong network)
+ * deep inside the signing flow.
+ */
 export interface BatchOperation {
+  /** The contract method to invoke (e.g. `'create_will'`). */
   method: string;
+  /** The arguments to the method as a record of name-value pairs. */
   args: Record<string, unknown>;
+  /**
+   * The Stellar network this operation targets. Omit to inherit the client's
+   * configured network.
+   */
+  network?: 'testnet' | 'mainnet';
 }
 
 export interface BatchResult {
@@ -329,6 +392,24 @@ export interface RequestOptions {
   retries?: number;
   timeout?: number;
   timeoutMs?: number;
+  /**
+   * When `true`, skips the client-side will-existence pre-check (e.g.
+   * `getWill()`) before submitting a state-changing transaction. Use only when
+   * the caller has already confirmed the will exists, to avoid an extra RPC
+   * round-trip. Methods that require the will's on-chain state for their
+   * return value (e.g. `checkIn`'s `nextDeadline`) may return a best-effort
+   * value when this is set.
+   * @default false
+   */
+  skipExistenceCheck?: boolean;
+}
+
+/** Options for emergency check-in, optionally providing guardian signatures. */
+export interface EmergencyCheckInOptions extends RequestOptions {
+  /** Optional guardian signature approving the emergency check-in. */
+  guardianSignature?: string;
+  /** Optional list of guardian signatures approving the emergency check-in. */
+  guardianSignatures?: string[];
 }
 
 export interface SoroWillEvent {
@@ -344,10 +425,38 @@ export interface SoroWillEvent {
   readonly raw: unknown;
 }
 
+/**
+ * A handle to an active event subscription.
+ *
+ * ### Handler semantics (#548)
+ *
+ * A subscription has **exactly one** handler: the `listener` passed to
+ * `subscribeToEvents()`. The type does not allow adding further handlers
+ * after the fact — there is no `addHandler()`/`on()` method.
+ *
+ * - **Exclusivity**: one subscription delivers each event to one listener
+ *   only. Events are never fanned out to multiple handlers of the same
+ *   subscription. If you need several consumers, call
+ *   `subscribeToEvents()` once per consumer and give each subscription its own
+ *   listener; each subscription then receives its own copy of the stream.
+ * - **Ordering**: events are delivered to the listener in the order the
+ *   network produced them — ascending ledger sequence, and within a ledger,
+ *   ascending event order. Delivery is strictly sequential: the next event is
+ *   not dispatched until the listener for the previous one has returned.
+ * - **Error isolation**: if the listener throws, the failure is contained to
+ *   that single event. The subscription stays open, the remaining events in
+ *   the same batch are still delivered, and the error is reported through
+ *   `EventSubscriptionOptions.onError`. This holds for both the WebSocket and
+ *   the polling transport.
+ */
 export interface EventSubscription {
+  /** Stops the subscription. Safe to call more than once. */
   unsubscribe(): void;
+  /** Alias for {@link EventSubscription.unsubscribe}. */
   close(): void;
+  /** The transport actually in use, once the subscription has been established. */
   transport?: EventSubscriptionTransport;
+  /** Whether the subscription has been closed. */
   closed?: boolean;
 }
 

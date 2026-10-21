@@ -27,7 +27,7 @@ describe('#376 duplicate beneficiaries', () => {
       { address: a, percentage: 50 },
     ];
     expect(hasDuplicateBeneficiaries(list)).toBe(true);
-    expect(validateBeneficiaries(list)).toBe(false);
+    expect(() => validateBeneficiaries(list)).toThrow(BeneficiaryValidationError);
   });
 
   it('detects duplicates that differ only in letter case', () => {
@@ -36,6 +36,8 @@ describe('#376 duplicate beneficiaries', () => {
       { address: a.toLowerCase(), percentage: 50 },
     ];
     expect(hasDuplicateBeneficiaries(list)).toBe(true);
+    // Lowercased address fails StrKey validation, so validateBeneficiaries
+    // returns false (invalid address) before reaching the duplicate check.
     expect(validateBeneficiaries(list)).toBe(false);
   });
 

@@ -56,7 +56,36 @@ export function orderSignatures(
   return [...signatures].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** Shared implementation for browser-injected wallet adapters. */
+/**
+ * Shared implementation for browser-injected wallet adapters.
+ *
+ * ## Network behavior
+ *
+ * - Network reporting is delegated to the injected provider: `getNetwork()`
+ *   returns whatever `provider.getNetwork()` reports, or falls back to the
+ *   `network`/`networkPassphrase` captured when the wallet connected.
+ * - The adapter cannot force a network: the provider decides which network
+ *   the user is connected to. Always confirm
+ *   `SoroWillClient.assertWalletNetwork()` after connecting so the client and
+ *   wallet agree on testnet vs mainnet before signing.
+ * - If the provider does not implement `getNetwork`, the SDK cannot verify the
+ *   wallet's network and skips the mismatch check (explicit opt-out).
+ *
+ * ## Known issues
+ *
+ * - An injected provider may report a different network than the app expects
+ *   (e.g. user switched wallets to mainnet while the app targets testnet).
+ *   This surfaces as a {@link WalletNetworkMismatchError} from the client,
+ *   not a silent wrong-network signature.
+ * - Some providers only populate `network`/`networkPassphrase` after a
+ *   successful `connect()`; calling `getNetwork()` before connecting throws.
+ *
+ * ## Workarounds
+ *
+ * - Pass a provider that reports the correct network for your deployment, and
+ *   call `client.assertWalletNetwork({ networkPassphrase })` after
+ *   `adapter.connect()` before submitting any transaction.
+ */
 export abstract class InjectedWalletAdapter implements WalletAdapter {
   abstract readonly id: string;
   abstract readonly name: string;

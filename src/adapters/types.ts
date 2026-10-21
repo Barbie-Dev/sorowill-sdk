@@ -1,7 +1,16 @@
 export type {
   SignTransactionOptions,
   WalletAdapter,
+  WalletAdapterError,
   WalletConnection,
+  WalletSession,
+} from '../wallet';
+export {
+  isFreighterInstallCheckError,
+  isSignTransactionTimeoutError,
+  isWalletNetworkMismatchError,
+  isWalletSessionError,
+  WalletSessionError,
 } from '../wallet';
 
 /**

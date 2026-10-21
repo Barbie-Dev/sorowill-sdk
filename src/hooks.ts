@@ -1,4 +1,4 @@
-import { HookExecutionError } from './errors';
+import { HookExecutionError, HookRecursionError } from './errors';
 
 /**
  * Contains all information about the contract call about to be made.
@@ -33,12 +33,21 @@ export interface AfterInvokeContext {
 
 /**
  * A function that runs before a contract call is submitted.
- * Return `false` to abort the invocation, or `void` to proceed.
+ *
+ * Return contract (validated at runtime by {@link HookManager}):
+ * - `false` — abort the invocation.
+ * - `true` or `undefined` (void) — proceed with the invocation.
+ *
+ * Any other return value (string, number, object, `null`, …) is rejected with
+ * a {@link HookExecutionError} so that accidental return values (e.g. the
+ * boolean from `Map.set()` or `array.push()`) cannot silently change — or
+ * appear to change — the control flow of an invocation.
  */
 export type BeforeInvokeHook = (ctx: BeforeInvokeContext) => boolean | void | Promise<boolean | void>;
 
 /**
  * A function that runs after a contract call completes (success or failure).
+ * The return value is ignored; hooks must not return anything meaningful.
  */
 export type AfterInvokeHook = (ctx: AfterInvokeContext) => void | Promise<void>;
 
@@ -74,6 +83,13 @@ export class HookManager {
     afterInvoke: [],
   };
 
+  /**
+   * Set while `runBeforeInvoke` or `runAfterInvoke` is actively executing.
+   * Used to detect and reject re-entrant (recursive) hook execution, where a
+   * hook triggers another contract invocation through the same client.
+   */
+  private executing = false;
+
   /** Register a hook that runs before every contract invocation. */
   onBeforeInvoke(hook: BeforeInvokeHook): void {
     this.registry.beforeInvoke.push(hook);
@@ -108,22 +124,61 @@ export class HookManager {
     this.registry.afterInvoke.length = 0;
   }
 
+  /**
+   * @internal Guard for the documented return contract of hook callbacks.
+   *
+   * `beforeInvoke` hooks may only return `boolean` (control the invocation) or
+   * `undefined`/void (proceed). Anything else is a programming error — e.g.
+   * `hooks.onBeforeInvoke((ctx) => cache.set(ctx.method, true))` returns the
+   * `boolean` from `Map.set()` that the author never intended to expose — and
+   * is rejected here with a clear {@link HookExecutionError} instead of being
+   * silently ignored.
+   */
+  private static assertAllowedHookReturnValue(result: unknown, hookName: string): void {
+    if (result === undefined || typeof result === 'boolean') {
+      return;
+    }
+
+    const receivedType = result === null ? 'null' : typeof result;
+    throw new HookExecutionError(
+      hookName,
+      new TypeError(
+        `${hookName} hook returned a value of type "${receivedType}" — hooks must return ` +
+          `a boolean (false aborts the invocation) or void (proceeds).`,
+      ),
+    );
+  }
+
   /** @internal Run all beforeInvoke hooks. Returns `false` if any hook aborted.
    * If any hook throws, the error is wrapped in a `HookExecutionError` and
    * re-thrown immediately. The transaction is not built or submitted when a
    * hook throws — the client state is unchanged.
+   *
+   * A hook that returns anything other than a boolean or void is rejected with
+   * a `HookExecutionError` whose message names the offending return type.
    */
   async runBeforeInvoke(ctx: BeforeInvokeContext): Promise<boolean> {
-    for (const hook of this.registry.beforeInvoke) {
-      let result: boolean | void;
-      try {
-        result = await hook(ctx);
-      } catch (err) {
-        throw new HookExecutionError('beforeInvoke', err);
-      }
-      if (result === false) return false;
+    if (this.executing) {
+      throw new HookRecursionError();
     }
-    return true;
+    this.executing = true;
+    try {
+      for (const hook of this.registry.beforeInvoke) {
+        let result: boolean | void;
+        try {
+          result = await hook(ctx);
+        } catch (err) {
+          // Let recursion errors propagate unwrapped so callers can catch them
+          // directly; wrap any other hook error as before.
+          if (err instanceof HookRecursionError) throw err;
+          throw new HookExecutionError('beforeInvoke', err);
+        }
+        if (result === false) return false;
+      }
+      return true;
+    } finally {
+      this.executing = false;
+    }
   }
 
   /**
@@ -134,12 +189,22 @@ export class HookManager {
    * Every hook still runs exactly once, in order, even if an earlier one throws.
    */
   async runAfterInvoke(ctx: AfterInvokeContext): Promise<void> {
-    for (const hook of this.registry.afterInvoke) {
-      try {
-        await hook(ctx);
-      } catch {
-        // Intentionally ignored — see method doc.
+    if (this.executing) {
+      throw new HookRecursionError();
+    }
+    this.executing = true;
+    try {
+      for (const hook of this.registry.afterInvoke) {
+        try {
+          await hook(ctx);
+        } catch (err) {
+          // Let recursion errors propagate unwrapped; swallow any other hook
+          // error — afterInvoke is instrumentation and must not break the call.
+          if (err instanceof HookRecursionError) throw err;
+        }
       }
+    } finally {
+      this.executing = false;
     }
   }
 

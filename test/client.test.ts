@@ -233,6 +233,32 @@ describe('validateBeneficiaries', () => {
     }));
     expect(validateBeneficiaries(exactlyMax)).toBe(true);
   });
+
+  it('accepts floating-point percentages that sum to 100 within epsilon (33.33+33.33+33.34)', () => {
+    const a = Keypair.random().publicKey();
+    const b = Keypair.random().publicKey();
+    const c = Keypair.random().publicKey();
+    expect(
+      validateBeneficiaries([
+        { address: a, percentage: 33.33 },
+        { address: b, percentage: 33.33 },
+        { address: c, percentage: 33.34 },
+      ]),
+    ).toBe(true);
+  });
+
+  it('rejects floating-point percentages that do not sum to 100', () => {
+    const a = Keypair.random().publicKey();
+    const b = Keypair.random().publicKey();
+    const c = Keypair.random().publicKey();
+    expect(
+      validateBeneficiaries([
+        { address: a, percentage: 33.33 },
+        { address: b, percentage: 33.33 },
+        { address: c, percentage: 33.33 },
+      ]),
+    ).toBe(false);
+  });
 });
 
 describe('validateGuardians', () => {
@@ -250,8 +276,17 @@ describe('validateGuardians', () => {
   });
 
   it('rejects too many guardians exceeding MAX_GUARDIANS', () => {
-    const tooMany = Array.from({ length: MAX_GUARDIANS + 1 }, (_, i) => `G${i}`);
+    const tooMany = Array.from({ length: MAX_GUARDIANS + 1 }, () =>
+      Keypair.random().publicKey(),
+    );
     expect(validateGuardians(tooMany)).toBe(false);
+  });
+
+  it('accepts exactly MAX_GUARDIANS valid guardians', () => {
+    const exactlyMax = Array.from({ length: MAX_GUARDIANS }, () =>
+      Keypair.random().publicKey(),
+    );
+    expect(validateGuardians(exactlyMax)).toBe(true);
   });
 
   it('rejects duplicate guardian addresses', () => {
