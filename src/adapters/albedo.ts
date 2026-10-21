@@ -47,6 +47,36 @@ export interface AlbedoAdapterOptions {
  * Creates a {@link WalletAdapter} backed by Albedo (https://albedo.link), a
  * web-based Stellar signer that requires no browser extension.
  *
+ * ## Network behavior
+ *
+ * - The adapter reports the network passed via `networkPassphrase` (defaults
+ *   to `Networks.PUBLIC` / mainnet). Albedo itself is told `'testnet'` or
+ *   `'public'` via {@link toAlbedoNetwork}; custom/standalone passphrases are
+ *   passed through unchanged.
+ * - The same adapter instance is bound to a single network. To switch
+ *   networks (e.g. testnet ↔ mainnet) create a new adapter with the desired
+ *   `networkPassphrase`; do not reuse one instance across networks, or the
+ *   reported network will not match the network the client is configured for
+ *   and {@link SoroWillClient.assertWalletNetwork} will surface a mismatch.
+ * - Albedo signs transactions for whichever network is passed to `albedo.tx()`;
+ *   the SDK forwards `opts.networkPassphrase` on every `signTransaction` call,
+ *   so a caller could technically sign for a different network than the one
+ *   reported — avoid that, as it produces signatures valid on the wrong
+ *   network.
+ *
+ * ## Known issues
+ *
+ * - `@albedo-link/intent` is loaded lazily because its UMD bundle assumes a
+ *   browser `window` global and throws outside one (e.g. in Node/test).
+ * - Albedo does not expose a `disconnect()` equivalent; `disconnect()` only
+ *   clears the SDK-side cached state.
+ *
+ * ## Workarounds
+ *
+ * - Always construct the adapter with the passphrase that matches your
+ *   `SoroWillClient.network` (`Networks.TESTNET` for testnet,
+ *   `Networks.PUBLIC` for mainnet).
+ *
  * ```ts
  * import { Networks } from '@stellar/stellar-sdk';
  * import { SoroWillClient, createAlbedoAdapter } from '@sorowill/sdk';

@@ -1710,9 +1710,52 @@ export class SoroWillClient {
    * network would charge, without signing or submitting anything. Useful for
    * showing a fee estimate in a UI before the user commits to a transaction.
    *
-   * `resourceFee` is the operation-specific Soroban resource cost (CPU, RAM,
-   * ledger I/O, storage). `totalFee` adds the base inclusion fee, giving the
-   * minimum total fee the network will accept for this call.
+   * ## Fee calculation strategy
+   *
+   * The estimate is produced by a read-only Soroban simulation:
+   *
+   * 1. `resourceFee` = `simulation.minResourceFee` — the operation-specific
+   *    Soroban resource cost (CPU instructions, memory, ledger reads/writes,
+   *    storage rent). A `merge_wills` with many beneficiaries costs far more
+   *    than a `check_in`.
+   * 2. `totalFee` = `BASE_FEE` + `resourceFee` — the minimum total fee (in
+   *    stroops) the network will accept for this call. `BASE_FEE` is the
+   *    per-operation inclusion fee.
+   *
+   * The returned fees are strings (base-10 stroops) and can be displayed
+   * directly or converted with {@link formatUSDC} / {@link formatTokenAmount}.
+   *
+   * ## Custom fee support
+   *
+   * The SDK does not expose an arbitrary per-transaction `maxFee` override.
+   * Instead, fee control is handled through:
+   *
+   * - `autoFeeBumpOnTimeout` (client option): if a transaction doesn't land
+   *   within the poll window, the SDK automatically rebuilds and resubmits it
+   *   with a higher fee instead of throwing.
+   * - `transactionTimeoutSeconds` (client option): the validity window set on
+   *   every built transaction via `setTimeout()`.
+   * - `previewFee`: simulate the actual cost before the user commits, so the
+   *   UI can surface an accurate estimate rather than a hardcoded value.
+   *
+   * State-changing SDK calls always simulate via `prepareTransaction` before
+   * submission, so the submitted fee already includes the simulated resource
+   * fee — you generally do not need to size fees manually.
+   *
+   * ## Examples
+   *
+   * ```ts
+   * const { resourceFee, totalFee } = await client.previewFee('check_in', {
+   *   will_id: '42',
+   *   owner: ownerPublicKey,
+   * });
+   * console.log(`Estimated total fee: ${totalFee} stroops`);
+   *
+   * // Show the estimate in a UI before the user signs.
+   * if (BigInt(totalFee) > MAX_ACCEPTABLE_FEE) {
+   *   warnUser('Fee is higher than expected');
+   * }
+   * ```
    *
    * @see https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering
    */
@@ -2555,6 +2598,20 @@ export class SoroWillClient {
    * the actual cost. State-changing SDK calls always simulate via
    * `prepareTransaction` before submission, so the submitted fee already
    * includes the simulated resource fee.
+   *
+   * Results are cached per network passphrase (keyed by the wallet's current
+   * passphrase) and flushed automatically when the wallet switches networks,
+   * so you never see stale fees from a previous network. Call
+   * {@link flushFeeStatsCache} to force a refresh after a network switch.
+   *
+   * ## Example
+   *
+   * ```ts
+   * const stats = await client.getNetworkFeeStats();
+   * console.log('Fee stats:', stats);
+   * // Use `previewFee` for an operation-specific estimate rather than these
+   * // network-wide stats alone.
+   * ```
    *
    * @see https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering
    *

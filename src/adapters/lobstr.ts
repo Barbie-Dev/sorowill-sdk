@@ -27,6 +27,35 @@ export interface LobstrWalletAdapterOptions {
  *
  * `connect()` publishes the pairing URI before awaiting approval, allowing the
  * host to render a QR code or open the corresponding LOBSTR deep link.
+ *
+ * ## Network behavior
+ *
+ * - Network reporting is delegated to the LOBSTR session client:
+ *   `getNetwork()` returns whatever `client.getNetwork()` reports. If the
+ *   session client does not implement `getNetwork`, `getNetwork()` throws
+ *   ("LOBSTR session client does not support network detection") and the SDK
+ *   cannot verify the wallet's network.
+ * - LOBSTR does not let the SDK force a network: the LOBSTR app decides which
+ *   network the user is on. Always confirm
+ *   `SoroWillClient.assertWalletNetwork()` after connecting so the client and
+ *   wallet agree on testnet vs mainnet before signing.
+ *
+ * ## Known issues
+ *
+ * - LOBSTR may be connected to mainnet while the app targets testnet (or vice
+ *   versa). Without `client.getNetwork()` the SDK cannot detect this and
+ *   `getNetwork()` throws; with it, a mismatch surfaces as a
+ *   {@link WalletNetworkMismatchError}, not a silent wrong-network signature.
+ * - Pairing requires the user to scan a QR code / open a deep link on mobile,
+ *   so `connect()` can time out if the user never approves (`approvalTimeoutMs`).
+ *
+ * ## Workarounds
+ *
+ * - Ensure the session client implements `getNetwork()` and returns the
+ *   network matching your deployment, then call
+ *   `client.assertWalletNetwork({ networkPassphrase })` after
+ *   `adapter.connect()` before submitting any transaction.
+ * - Tune `approvalTimeoutMs` (default 60000ms) for slower pairing flows.
  */
 export class LobstrWalletAdapter implements WalletAdapter {
   readonly id = 'lobstr';

@@ -49,7 +49,37 @@ export interface LedgerWalletAdapterOptions {
   app?: LedgerStellarApp;
 }
 
-/** Wallet adapter backed by the Ledger Stellar device application. */
+/**
+ * Wallet adapter backed by the Ledger Stellar device application.
+ *
+ * ## Network behavior
+ *
+ * - The adapter reports the `networkPassphrase` (and optional `network`)
+ *   supplied in `LedgerWalletAdapterOptions`; it does not query the device for
+ *   the network. The same derivation path (`44'/148'/0'` by default) is used
+ *   on both testnet and mainnet, so the same Ledger account can interoperate
+ *   with either network — but you must tell the adapter which one.
+ * - `signTransaction` rejects with {@link WalletNetworkMismatchError} if the
+ *   `networkPassphrase` on a signing call differs from the adapter's
+ *   configured passphrase, preventing signatures valid on the wrong network.
+ *
+ * ## Known issues
+ *
+ * - Ledger does not report the network it is configured for, so the SDK has no
+ *   way to detect that a user's Ledger is set to mainnet while the app targets
+ *   testnet (or vice versa) beyond the passphrase you configure. A mismatch
+ *   only surfaces when the client's `assertWalletNetwork` compares passphrases.
+ * - The on-device confirmation prompt can take longer than the default
+ *   timeout; set `timeoutMs` higher for mainnet congestion or slow users.
+ *
+ * ## Workarounds
+ *
+ * - Construct the adapter with the `networkPassphrase` matching your
+ *   `SoroWillClient.network` and call
+ *   `client.assertWalletNetwork({ networkPassphrase })` after connecting
+ *   before submitting any transaction.
+ * - Increase `timeoutMs` if users regularly walk away mid-confirmation.
+ */
 export class LedgerWalletAdapter implements WalletAdapter {
   readonly id = 'ledger';
   readonly name = 'Ledger';
