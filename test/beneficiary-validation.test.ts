@@ -209,14 +209,36 @@ describe('createWill — beneficiary validation fast-fail', () => {
     ).rejects.toThrow(BeneficiaryValidationError);
   });
 
-  it('throws BeneficiaryValidationError for a fractional percentage', async () => {
+  it('accepts fractional percentages that sum to 100 (e.g. 33.5 + 66.5)', async () => {
     const client = makeClient();
+    freighterApiMock.signTransaction.mockResolvedValue({ envelope_xdr: 'SIGNED_XDR', error: undefined });
+    mockState.sendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'TXHASH' });
+    // The mock Spec's funcResToNative is the identity function, so the return
+    // value must already be the decoded will id (a bigint).
+    mockState.pollTransaction.mockResolvedValue({
+      status: 'SUCCESS',
+      createdAt: 1_700_000_000,
+      returnValue: 1n,
+    });
     await expect(
       client.createWill({
         ...BASE_CREATE_WILL_PARAMS,
         beneficiaries: [
           { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 33.5 },
           { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 66.5 },
+        ],
+      }),
+    ).resolves.toMatchObject({ willId: '1', txHash: 'TXHASH' });
+  });
+
+  it('rejects fractional percentages that do not sum to 100', async () => {
+    const client = makeClient();
+    await expect(
+      client.createWill({
+        ...BASE_CREATE_WILL_PARAMS,
+        beneficiaries: [
+          { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 33.5 },
+          { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 66.4 },
         ],
       }),
     ).rejects.toThrow(BeneficiaryValidationError);

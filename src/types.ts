@@ -88,8 +88,9 @@ export enum WillErrorCode {
  * A single beneficiary entry: an address and the percentage of the will's
  * balance it is entitled to receive when the inheritance is released.
  *
- * `percentage` is on a 0-100 scale (a positive integer), and a will's
- * beneficiary percentages must sum to exactly 100. The SDK converts this to
+ * `percentage` is on a 0-100 scale (a positive number — integers and
+ * reasonable fractional values like `33.33` are both accepted), and a will's
+ * beneficiary percentages must sum to 100. The SDK converts this to
  * the contract's internal basis-point representation (0-10,000, summing to
  * 10,000) when submitting a transaction, so a `percentage` of `30` is bound
  * on-chain as `3000` basis points.

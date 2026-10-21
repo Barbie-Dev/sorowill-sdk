@@ -528,7 +528,10 @@ function toContractBeneficiaries(
 ): Array<{ address: string; basis_points: number }> {
   return beneficiaries.map((beneficiary) => ({
     address: beneficiary.address,
-    basis_points: beneficiary.percentage * PERCENT_TO_BASIS_POINTS,
+    // Math.round strips binary floating-point artifacts (e.g. 0.1 * 100 is
+    // 10.000000000000002) so the emitted basis points are always integers
+    // that still sum to exactly 10,000 when validation accepted the list.
+    basis_points: Math.round(beneficiary.percentage * PERCENT_TO_BASIS_POINTS),
   }));
 }
 
@@ -977,7 +980,7 @@ export class SoroWillClient {
     }
     if (!validateBeneficiaries(params.beneficiaries)) {
       throw new BeneficiaryValidationError(
-        'Invalid beneficiaries: list must be 1–10 entries, every percentage must be a positive integer, and percentages must sum to exactly 100.',
+        'Invalid beneficiaries: list must be 1–10 entries, every percentage must be a positive number, and percentages must sum to 100.',
       );
     }
     // #156: Validate guardians count synchronously before any RPC round-trip.
@@ -1236,7 +1239,7 @@ export class SoroWillClient {
     }
     if (!validateBeneficiaries(params.beneficiaries)) {
       throw new BeneficiaryValidationError(
-        'Invalid beneficiaries: list must be 1–10 entries, every percentage must be a positive integer, and percentages must sum to exactly 100.',
+        'Invalid beneficiaries: list must be 1–10 entries, every percentage must be a positive number, and percentages must sum to 100.',
       );
     }
     // Validate will existence before submitting, to avoid wasting gas on a
