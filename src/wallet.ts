@@ -64,6 +64,21 @@ export function isFreighterInstallCheckError(
  */
 export interface WalletSession {
   token: string;
+  /**
+   * Session expiry as UTC milliseconds since the Unix epoch
+   * (`Date.now()`-compatible). Compare against `Date.now()` to determine
+   * whether the session is still valid. A session is considered expired when
+   * `expiresAt <= now`.
+   *
+   * @example
+   * ```ts
+   * // 15 minutes from now (UTC milliseconds)
+   * const session: WalletSession = {
+   *   token: 'abc123',
+   *   expiresAt: Date.now() + 15 * 60 * 1000,
+   * };
+   * ```
+   */
   expiresAt?: number;
 }
 

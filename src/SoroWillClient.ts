@@ -826,6 +826,15 @@ export class SoroWillClient {
    * not subject to TTL expiry.
    */
   private readonly specCacheTtlMs: number;
+  /**
+   * Tracks hashes of transactions that have been signed by this client to
+   * prevent duplicate signing (and thus duplicate submissions) of the same
+   * transaction (#573). A transaction's hash is determined by its contents
+   * (source account, sequence number, operations, fee, timeout) and is
+   * identical before and after signing, so we can detect duplicates prior to
+   * sending the signed envelope to the wallet.
+   */
+  private readonly signedTransactionHashes: Set<string>;
 
   constructor(options: SoroWillClientOptions) {
     const config = NETWORK_CONFIG[options.network];
@@ -884,6 +893,8 @@ export class SoroWillClient {
       // different client instances targeting different contracts never share a
       // dedup entry for the same (willId, method) pair (#503).
       new InFlightTracker(options.contractId);
+    // #573: Track signed transaction hashes to prevent duplicate signing.
+    this.signedTransactionHashes = new Set();
     this.readCache = options.readCache === false ? undefined : new ReadCache(options.readCache);
     this.retryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry };
     const { maxAttempts, initialDelayMs, maxDelayMs, backoffFactor } = this.retryOptions;
@@ -1711,13 +1722,14 @@ export class SoroWillClient {
    * Simulates, signs, and submits a raw contract call given by its native method name and arguments.
    * Arguments use the native names and values accepted by the deployed contract spec.
    *
-   * Soroban transactions may contain only a single `InvokeHostFunction` operation, so a batch
-   * must contain exactly one operation; multiple calls cannot be combined into one atomic
-   * transaction and must be submitted separately.
+   * **Maximum batch size: 1.** Soroban transactions may contain only a single
+   * `InvokeHostFunction` operation, so a batch must contain exactly one
+   * operation; multiple calls cannot be combined into one atomic transaction
+   * and must be submitted separately.
    *
    * @returns The transaction hash and creation timestamp.
    * @throws {RangeError} If the batch contains zero operations.
-   * @throws {UnsupportedBatchSizeError} If the batch contains more than one operation.
+   * @throws {UnsupportedBatchSizeError} If the batch contains more than one operation (i.e. exceeds the maximum batch size of 1).
    * @throws {SoroWillError} If the transaction simulation/submission fails.
    * @throws {RequestTimeoutError} If the RPC request exceeds its configured timeout.
    * @throws {WillContractError} Mapped contract-level errors from any operation in the batch.
@@ -2435,6 +2447,12 @@ export class SoroWillClient {
   }> {
     options?.signal?.throwIfAborted();
 
+    // #573: Tracks the XDR key added to `signedTransactionHashes` by THIS
+    // submission. Declared outside try/finally so the finally block can
+    // release it after submission completes without clobbering a hash that
+    // a concurrently-detected duplicate attempt is holding.
+    let trackedHash: string | undefined;
+
     try {
       await this.assertWalletNetwork({ networkPassphrase: this.networkPassphrase });
       const publicKey = await this.getWalletPublicKey();
@@ -2465,6 +2483,23 @@ export class SoroWillClient {
         options,
       );
       this.debugLogger.logSimulation(label, undefined, prepared.fee);
+
+      // #573: Prevent duplicate signing of the same transaction. The
+      // prepared transaction's XDR encodes its full contents (source account,
+      // sequence number, operations, fee, timeout) and is identical before
+      // and after signing, so we can use it as a content-derived key to detect
+      // duplicates before sending to the wallet. The hash is tracked for the
+      // duration of this submission and released in the finally block so that
+      // sequential submissions (e.g. retries) are not blocked.
+      const txXdrKey = prepared.toXDR();
+      if (this.signedTransactionHashes.has(txXdrKey)) {
+        throw new SoroWillError(
+          `Transaction ${txXdrKey.slice(0, 16)}... has already been signed by this client. ` +
+            'Refusing to sign again to prevent duplicate submissions.',
+        );
+      }
+      this.signedTransactionHashes.add(txXdrKey);
+      trackedHash = txXdrKey;
 
       const signedTxResponse = await this.wallet.signTransaction(prepared.toXDR(), {
         networkPassphrase: this.networkPassphrase,
@@ -2596,6 +2631,13 @@ export class SoroWillClient {
         throw error;
       }
       throw mapContractError(error);
+    } finally {
+      // #573: Release the hash only if THIS submission added it, so a
+      // rejected duplicate attempt cannot release a hash still held by the
+      // in-flight original submission.
+      if (trackedHash !== undefined) {
+        this.signedTransactionHashes.delete(trackedHash);
+      }
     }
   }
 

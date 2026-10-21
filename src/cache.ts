@@ -22,6 +22,19 @@ export interface ReadCacheOptions {
    * from persistence). When omitted, the cache is unbounded.
    */
   maxEntries?: number;
+  /**
+   * Callback invoked when a persistence adapter operation (write, delete, or
+   * clear) fails. Receives the affected key and the error. The cache continues
+   * to function in-memory; only durability is affected.
+   */
+  onPersistenceFailure?: (key: string, error: unknown) => void;
+  /**
+   * When `true`, a persistence write failure in `set()` rolls back the
+   * in-memory cache entry (removes it) so memory and persistence stay in sync.
+   * Defaults to `false` (the in-memory entry is kept even if persistence
+   * fails). When `false`, only the `onPersistenceFailure` callback is invoked.
+   */
+  rollbackOnPersistenceFailure?: boolean;
 }
 
 interface CacheEntry {
@@ -134,6 +147,8 @@ export class ReadCache {
   private readonly now: () => number;
   private readonly persistence: CachePersistenceAdapter | undefined;
   private readonly maxEntries: number | undefined;
+  private readonly onPersistenceFailure: ((key: string, error: unknown) => void) | undefined;
+  private readonly rollbackOnPersistenceFailure: boolean;
   private readonly readyPromise: Promise<void>;
   /**
    * Keys written or deleted after construction but before hydration completes.
@@ -163,6 +178,8 @@ export class ReadCache {
     this.now = options.now ?? Date.now;
     this.persistence = options.persistence;
     this.maxEntries = options.maxEntries;
+    this.onPersistenceFailure = options.onPersistenceFailure;
+    this.rollbackOnPersistenceFailure = options.rollbackOnPersistenceFailure ?? false;
     this.readyPromise = this.hydrate();
   }
 
@@ -202,7 +219,9 @@ export class ReadCache {
   set(key: string, value: unknown, willIds: Iterable<string> = []): void {
     if (this.ttlMs === 0) {
       this.touchedKeys.add(key);
-      void this.persistence?.delete(key);
+      void this.persistence
+        ?.delete(key)
+        .catch((err) => this.onPersistenceFailure?.(key, err));
       return;
     }
 
@@ -219,9 +238,14 @@ export class ReadCache {
     this.entries.set(key, entry);
     void this.persistence
       ?.write(this.toPersistedEntry(entry))
-      .catch(() => {
-        // Silently ignore persistence failures to prevent unhandled rejections
-        // The cache remains functional in-memory; only durability is lost
+      .catch((err) => {
+        // Report persistence failure via callback if provided
+        this.onPersistenceFailure?.(key, err);
+        // Optionally roll back the in-memory entry so memory and persistence stay in sync
+        if (this.rollbackOnPersistenceFailure) {
+          this.entries.delete(key);
+          this.touchedKeys.delete(key);
+        }
       });
 
     this.evictIfNeeded();
@@ -257,10 +281,9 @@ export class ReadCache {
   clear(): void {
     this.clearedBeforeHydration = true;
     this.entries.clear();
-    void this.persistence?.clear().catch(() => {
-      // Silently ignore persistence failures to prevent unhandled rejections
-      // The cache is cleared in-memory; only durability guarantee is lost
-    });
+    void this.persistence
+      ?.clear()
+      .catch((err) => this.onPersistenceFailure?.('__clear__', err));
   }
 
   private evictIfNeeded(): void {
@@ -276,17 +299,20 @@ export class ReadCache {
 
       this.entries.delete(oldestKey);
       this.touchedKeys.add(oldestKey);
-      void this.persistence?.delete(oldestKey).catch(() => {
-        // Silently ignore persistence failures to prevent unhandled rejections
-        // The entry is evicted in-memory; only durability guarantee is lost
-      });
+      void this.persistence
+        ?.delete(oldestKey)
+        .catch((err) => this.onPersistenceFailure?.(oldestKey, err));
     }
   }
 
   private async delete(key: string): Promise<void> {
     this.touchedKeys.add(key);
     this.entries.delete(key);
-    await this.persistence?.delete(key);
+    try {
+      await this.persistence?.delete(key);
+    } catch (err) {
+      this.onPersistenceFailure?.(key, err);
+    }
   }
 
   private async hydrate(): Promise<void> {
