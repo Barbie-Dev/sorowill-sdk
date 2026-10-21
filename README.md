@@ -267,6 +267,57 @@ Soroban transactions may contain only a single `InvokeHostFunction` operation, s
 calls cannot be combined into one atomic transaction. `batch` therefore accepts exactly one
 operation and throws `UnsupportedBatchSizeError` for larger batches; submit each call separately.
 
+### Network validation (#550)
+
+Every `BatchOperation` may declare the Stellar network it targets:
+
+```ts
+const result = await client.batch([
+  {
+    method: 'check_in',
+    args: { will_id: 1n, owner: wallet.publicKey },
+    network: 'testnet', // optional — 'testnet' | 'mainnet'
+  },
+]);
+```
+
+The SDK validates the network of every operation **before** any transaction is built, signed, or
+submitted:
+
+- Operations that omit `network` inherit the client's configured network.
+- All operations that declare a `network` must declare the *same* network.
+- That network must match the network the client is configured for.
+
+A violation throws `BatchNetworkMismatchError` (with `clientNetwork`, `operationNetwork`,
+`operationIndex`, and — for a conflicting batch — `conflictingOperationIndex`/`conflictingNetwork`),
+so a batch can never silently mix testnet and mainnet operations.
+
+## Event subscriptions
+
+`subscribeToEvents(listener, options)` returns an `EventSubscription` handle:
+
+```ts
+const subscription = await client.subscribeToEvents(
+  (event) => console.log(event.type, event.id),
+  { transport: 'auto', onError: (err) => console.error(err) },
+);
+
+subscription.unsubscribe(); // or subscription.close()
+```
+
+**Handler semantics.** A subscription has **exactly one** handler — the `listener` passed to
+`subscribeToEvents()`. The returned handle exposes no way to attach a second one.
+
+- **Exclusivity**: each event is delivered to that one listener only; events are never fanned out to
+  multiple handlers of the same subscription. To serve several consumers, call `subscribeToEvents()`
+  once per consumer — each subscription then receives its own copy of the stream.
+- **Ordering**: events are delivered in the order the network produced them (ascending ledger
+  sequence, and within a ledger, ascending event order). Delivery is strictly sequential: the next
+  event is not dispatched until the listener for the previous one has returned.
+- **Error isolation**: if the listener throws, the failure is contained to that single event. The
+  subscription stays open, the remaining events are still delivered, and the error is reported through
+  `EventSubscriptionOptions.onError`. This holds for both the WebSocket and the polling transport.
+
 ## Debugging and structured logging
 
 The SDK includes a built-in structured debug logger that emits JSON logs for every operation: builds, simulations, submissions, polls, successes, and errors. This is useful for diagnosing failing or slow contract calls, monitoring transaction lifecycle, and understanding RPC behavior under load.
@@ -613,6 +664,7 @@ Notes:
 | `TooManyBeneficiariesError` | class | `errors` | Exceeds the maximum number of beneficiaries |
 | `RequestTimeoutError` | class | `errors` | An RPC request exceeded its configured timeout |
 | `WalletNetworkMismatchError` | class | `errors` | The wallet's active network does not match the client's configured network |
+| `BatchNetworkMismatchError` | class | `errors` | The operations in a `batch` target different networks, or a network other than the client's |
 | `FreighterInstallCheckError` | class | `errors` | An unexpected error occurred while checking whether Freighter is installed |
 | `SoroWillRestoreRequiredError` | class | `errors` | The contract entry needs a ledger restore before it can be invoked |
 | `InvalidPaginationOptionsError` | class | `errors` | The supplied pagination options are invalid |

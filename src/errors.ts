@@ -271,6 +271,48 @@ export class UnsupportedBatchSizeError extends SoroWillError {
 }
 
 /**
+ * Raised when the operations passed to {@link SoroWillClient.batch} do not all
+ * target the same Stellar network, or when the network they target differs
+ * from the network the client is configured for (#550).
+ *
+ * The check runs before any transaction is built, signed, or submitted, so a
+ * batch can never silently mix testnet and mainnet operations.
+ */
+export class BatchNetworkMismatchError extends SoroWillError {
+  /** The network the client is configured for. */
+  readonly clientNetwork: string;
+  /** The network the offending operation targets. */
+  readonly operationNetwork: string;
+  /** Index of the offending operation within the batch. */
+  readonly operationIndex: number;
+  /** Index of the operation declaring a conflicting network, when set. */
+  readonly conflictingOperationIndex: number | undefined;
+  /** The network declared by the conflicting operation, when set. */
+  readonly conflictingNetwork: string | undefined;
+
+  constructor(
+    clientNetwork: string,
+    operationNetwork: string,
+    operationIndex: number,
+    conflicting?: { operationIndex: number; network: string },
+    options?: ErrorOptions,
+  ) {
+    const message = conflicting
+      ? `Batch operations must all target the same network: operation ${operationIndex} targets ` +
+        `"${operationNetwork}" but operation ${conflicting.operationIndex} targets ` +
+        `"${conflicting.network}".`
+      : `Batch operation ${operationIndex} targets network "${operationNetwork}" but the client is ` +
+        `configured for "${clientNetwork}".`;
+    super(message, options);
+    this.clientNetwork = clientNetwork;
+    this.operationNetwork = operationNetwork;
+    this.operationIndex = operationIndex;
+    this.conflictingOperationIndex = conflicting?.operationIndex;
+    this.conflictingNetwork = conflicting?.network;
+  }
+}
+
+/**
  * Raised when the transaction XDR passed to {@link MultisigCollector} constructor
  * or {@link MultisigCollector.fromJSON} is not a syntactically valid Stellar
  * transaction envelope XDR. This includes malformed base64 or unsupported

@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The WebSocket event transport now isolates listener failures per event, matching the polling transport: a listener that throws no longer aborts the remaining events in the same message batch and no longer tears down the subscription (closes #548).
+
 - `getNetworkFeeStats()` now caches results per network passphrase rather than in a single global entry. If the connected wallet switches networks mid-session (e.g. Freighter toggled from testnet to mainnet), the cache is automatically flushed and fresh stats are fetched from the correct RPC endpoint (closes #500).
 - `Beneficiary` and `Will` interfaces in `src/types.ts` now carry JSDoc `@since` version tags and **Change history** tables so consumers can determine at a glance which SDK version introduced each field or breaking change (closes #501).
 - `WillStatus` enum members now carry `@since` tags indicating when each variant was introduced (closes #501).

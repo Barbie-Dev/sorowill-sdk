@@ -349,9 +349,37 @@ export type TransactionSigner<T = void> = (
 
 /* … truncated 2578 chars — edit only what you need near the top … */
 
+/**
+ * A single contract invocation to be executed as part of a batch.
+ *
+ * ### Networks (#550)
+ *
+ * `network` is optional. When present it declares which Stellar network the
+ * operation is intended for (`'testnet'` or `'mainnet'`). Every operation in
+ * a batch must agree on the same network, and that network must match the
+ * client's configured network:
+ *
+ * - Operations that omit `network` inherit the client's network and are
+ *   therefore always compatible with it.
+ * - If any operation specifies a network that differs from the client's
+ *   network, or if two operations specify *different* networks, the batch is
+ *   rejected with a {@link BatchNetworkMismatchError} before any transaction
+ *   is built, signed, or submitted.
+ *
+ * This prevents a batch from silently mixing testnet and mainnet operations,
+ * which would otherwise fail (or, worse, succeed against the wrong network)
+ * deep inside the signing flow.
+ */
 export interface BatchOperation {
+  /** The contract method to invoke (e.g. `'create_will'`). */
   method: string;
+  /** The arguments to the method as a record of name-value pairs. */
   args: Record<string, unknown>;
+  /**
+   * The Stellar network this operation targets. Omit to inherit the client's
+   * configured network.
+   */
+  network?: 'testnet' | 'mainnet';
 }
 
 export interface BatchResult {
@@ -389,10 +417,38 @@ export interface SoroWillEvent {
   raw: unknown;
 }
 
+/**
+ * A handle to an active event subscription.
+ *
+ * ### Handler semantics (#548)
+ *
+ * A subscription has **exactly one** handler: the `listener` passed to
+ * `subscribeToEvents()`. The type does not allow adding further handlers
+ * after the fact — there is no `addHandler()`/`on()` method.
+ *
+ * - **Exclusivity**: one subscription delivers each event to one listener
+ *   only. Events are never fanned out to multiple handlers of the same
+ *   subscription. If you need several consumers, call
+ *   `subscribeToEvents()` once per consumer and give each subscription its own
+ *   listener; each subscription then receives its own copy of the stream.
+ * - **Ordering**: events are delivered to the listener in the order the
+ *   network produced them — ascending ledger sequence, and within a ledger,
+ *   ascending event order. Delivery is strictly sequential: the next event is
+ *   not dispatched until the listener for the previous one has returned.
+ * - **Error isolation**: if the listener throws, the failure is contained to
+ *   that single event. The subscription stays open, the remaining events in
+ *   the same batch are still delivered, and the error is reported through
+ *   `EventSubscriptionOptions.onError`. This holds for both the WebSocket and
+ *   the polling transport.
+ */
 export interface EventSubscription {
+  /** Stops the subscription. Safe to call more than once. */
   unsubscribe(): void;
+  /** Alias for {@link EventSubscription.unsubscribe}. */
   close(): void;
+  /** The transport actually in use, once the subscription has been established. */
   transport?: EventSubscriptionTransport;
+  /** Whether the subscription has been closed. */
   closed?: boolean;
 }
 
