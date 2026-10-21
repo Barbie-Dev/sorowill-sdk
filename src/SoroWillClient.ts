@@ -45,6 +45,7 @@ import {
   AccountNotFundedError,
   BeneficiaryValidationError,
   GuardianValidationError,
+  CheckinPeriodExceedsTtlError,
   InvalidDayCountError,
   InvalidContractIdError,
   InvalidCursorError,
@@ -539,6 +540,32 @@ function sortWillsById(wills: Will[]): Will[] {
  */
 const PERCENT_TO_BASIS_POINTS = 100;
 
+/**
+ * Total beneficiary share expected on-chain, in basis points (100% = 10_000).
+ * The SDK accepts whole percentages (0-100 scale) and scales them by
+ * {@link PERCENT_TO_BASIS_POINTS}; the scaled total must equal this value or
+ * the contract rejects the transaction with `InvalidPercentages`.
+ */
+const TOTAL_BASIS_POINTS = 10_000;
+
+/**
+ * Maximum `checkinPeriodDays` accepted by {@link SoroWillClient.createWill}.
+ *
+ * The will ledger entry must stay live until its check-in deadline or it is
+ * archived and can no longer be triggered without a manual restore. Soroban
+ * persistent entries live at most ~1 year of ledgers without a TTL extension
+ * bump, so the check-in deadline (which is the only thing keeping the entry
+ * alive via periodic `check_in` calls) must fall inside that window. The cap
+ * is set conservatively below a full year (365 days) to leave headroom for
+ * ledger-close variance.
+ *
+ * **IMPORTANT**: mirrors the contract-side maximum period validated in
+ * `contracts/will/src/lib.rs` (`InvalidPeriod`); keep in sync manually.
+ *
+ * @since 0.1.2
+ */
+export const MAX_CHECKIN_PERIOD_DAYS = 365 - 30;
+
 /** Maps SDK beneficiaries (0-100 `percentage`) to the contract's `{ address, basis_points }` shape. */
 function toContractBeneficiaries(
   beneficiaries: Beneficiary[],
@@ -688,6 +715,48 @@ function validateDays(value: number, paramName: string): bigint {
     throw new InvalidDayCountError(paramName, value);
   }
   return BigInt(value);
+}
+
+/**
+ * Validates `checkinPeriodDays` against the contract storage TTL window.
+ * Runs after {@link validateDays} so non-positive / fractional values still
+ * surface as {@link InvalidDayCountError}; only in-range-but-unsafe values
+ * throw {@link CheckinPeriodExceedsTtlError}.
+ *
+ * @since 0.1.2
+ */
+function validateCheckinPeriodDays(value: number): bigint {
+  const days = validateDays(value, 'checkinPeriodDays');
+  if (value > MAX_CHECKIN_PERIOD_DAYS) {
+    throw new CheckinPeriodExceedsTtlError(value, MAX_CHECKIN_PERIOD_DAYS);
+  }
+  return days;
+}
+
+/**
+ * Validates that SDK beneficiaries (whole percentages, 0-100 scale) scale
+ * cleanly to the contract's basis points and total exactly 100% (10_000 bp).
+ * Throws {@link BeneficiaryValidationError} naming the scaled total when the
+ * on-chain sum would be short (e.g. 0 after per-entry rounding) or otherwise
+ * off — catching it here avoids a wasted signing round-trip that the contract
+ * would reject with `InvalidPercentages`.
+ *
+ * Assumes structural validation (count, addresses, positive integers)
+ * already passed via {@link validateBeneficiaries}.
+ *
+ * @since 0.1.2
+ */
+function assertBeneficiaryBasisPointsTotal(beneficiaries: Beneficiary[], method: string): void {
+  const totalBp = beneficiaries.reduce(
+    (acc, b) => acc + b.percentage * PERCENT_TO_BASIS_POINTS,
+    0,
+  );
+  if (totalBp !== TOTAL_BASIS_POINTS) {
+    throw new BeneficiaryValidationError(
+      `Invalid beneficiaries for ${method}: percentages scale to ${totalBp} basis points ` +
+        `but must total exactly ${TOTAL_BASIS_POINTS} (100%).`,
+    );
+  }
 }
 
 function getDefaultEnv(): EnvSource {
@@ -1003,6 +1072,7 @@ export class SoroWillClient {
         'Invalid beneficiaries: list must be 1–10 entries, every percentage must be a positive number, and percentages must sum to 100.',
       );
     }
+    assertBeneficiaryBasisPointsTotal(params.beneficiaries, 'createWill');
     // #156: Validate guardians count synchronously before any RPC round-trip.
     if (params.guardians.length > MAX_GUARDIANS) {
       throw new TooManyGuardiansError(params.guardians.length, MAX_GUARDIANS);
@@ -1010,6 +1080,9 @@ export class SoroWillClient {
     if (!StrKey.isValidContract(params.token)) {
       throw new InvalidContractIdError(params.token);
     }
+    // #537: fail fast when the check-in deadline would outlive the will
+    // entry's storage TTL (archived before it can be triggered).
+    validateCheckinPeriodDays(params.checkinPeriodDays);
     const owner = await this.getWalletPublicKey();
     const seenGuardians = new Set<string>();
     for (const guardian of params.guardians) {
@@ -1031,7 +1104,7 @@ export class SoroWillClient {
         token: params.token,
         amount: validateAmount(params.amount),
         beneficiaries: toContractBeneficiaries(params.beneficiaries),
-        checkin_period_days: validateDays(params.checkinPeriodDays, 'checkinPeriodDays'),
+        checkin_period_days: validateCheckinPeriodDays(params.checkinPeriodDays),
         grace_period_days: validateDays(params.gracePeriodDays, 'gracePeriodDays'),
         guardians: params.guardians,
       },

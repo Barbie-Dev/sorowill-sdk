@@ -784,6 +784,35 @@ export class InvalidDayCountError extends SoroWillError {
 }
 
 /**
+ * Raised when `checkinPeriodDays` passed to {@link SoroWillClient.createWill}
+ * exceeds the contract storage TTL window the will entry can survive without
+ * a check-in extending it. A will whose check-in deadline outlives the
+ * ledger-entry TTL would be archived before it can be triggered, bricking it
+ * until a manual restore.
+ *
+ * Thrown synchronously before any RPC call is made.
+ *
+ * @since 0.1.2
+ */
+export class CheckinPeriodExceedsTtlError extends SoroWillError {
+  /** Check-in period supplied (in days). */
+  readonly suppliedDays: number;
+  /** Maximum check-in period allowed (in days). */
+  readonly maxDays: number;
+
+  constructor(suppliedDays: number, maxDays: number, options?: ErrorOptions) {
+    super(
+      `Invalid checkinPeriodDays ${suppliedDays}: exceeds the maximum of ${maxDays} days ` +
+        'imposed by the contract storage TTL window. A will whose check-in deadline outlives ' +
+        'its ledger-entry TTL would be archived before it can be triggered.',
+      options,
+    );
+    this.suppliedDays = suppliedDays;
+    this.maxDays = maxDays;
+  }
+}
+
+/**
  * Raised when a Soroban simulation returns a "restore required" result,
  * indicating that archived/expired ledger entries must be restored via a
  * separate {@link https://developers.stellar.org/docs/smart-contracts/guides/archival | footprint-restoration transaction}

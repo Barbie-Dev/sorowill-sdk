@@ -1,4 +1,51 @@
 /**
+ * Log severity levels used by {@link DebugLogger} for filtering output.
+ *
+ * Levels are ordered from most severe (lowest priority number) to least
+ * severe (highest priority number). A logger configured with a minimum level
+ * suppresses all entries below that threshold.
+ *
+ * @since 0.1.2
+ */
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+/**
+ * Priority rank for each {@link LogLevel}. Lower numbers are more severe and
+ * are always logged when their threshold is met or exceeded.
+ */
+const SEVERITY_PRIORITY: Record<LogLevel, number> = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  debug: 3,
+};
+
+/**
+ * Default minimum severity. `debug` preserves the existing behavior (all
+ * levels logged when the logger is active). Set `SOROWILL_LOG_LEVEL` to a
+ * more severe level (e.g. `error`) to suppress less important output.
+ */
+const DEFAULT_LOG_LEVEL: LogLevel = 'debug';
+
+/**
+ * Resolves the minimum log severity from the `SOROWILL_LOG_LEVEL` environment
+ * variable. Falls back to {@link DEFAULT_LOG_LEVEL} when the variable is
+ * unset, empty, or contains an unrecognized value.
+ */
+function resolveLogLevel(): LogLevel {
+  const raw =
+    typeof process !== 'undefined' &&
+    typeof process.env !== 'undefined' &&
+    typeof process.env['SOROWILL_LOG_LEVEL'] === 'string'
+      ? process.env['SOROWILL_LOG_LEVEL'].trim().toLowerCase()
+      : undefined;
+  if (raw && raw in SEVERITY_PRIORITY) {
+    return raw as LogLevel;
+  }
+  return DEFAULT_LOG_LEVEL;
+}
+
+/**
  * Determines whether debug logging should be active based on environment.
  *
  * Logging is active when ALL of the following are true:
@@ -61,10 +108,25 @@ function isProductionEnvironment(): boolean {
 interface DebugLog {
   timestamp: string;
   level: 'operation-build' | 'simulation' | 'submission' | 'poll' | 'success' | 'error';
+  /** Severity used for filtering against the configured minimum level. */
+  severity?: LogLevel;
   method: string;
   willId?: string | undefined;
   details: Record<string, unknown>;
 }
+
+/**
+ * Maps each {@link DebugLog.level} to its {@link LogLevel} severity so the
+ * `log()` method can filter entries below the configured minimum threshold.
+ */
+const LEVEL_SEVERITY: Record<DebugLog['level'], LogLevel> = {
+  'operation-build': 'info',
+  simulation: 'debug',
+  submission: 'info',
+  poll: 'debug',
+  success: 'info',
+  error: 'error',
+};
 
 export class DebugLogger {
   /**
@@ -77,8 +139,19 @@ export class DebugLogger {
    */
   readonly isActive: boolean;
 
+  /**
+   * Minimum severity this logger will emit. Resolved at construction time
+   * from the `SOROWILL_LOG_LEVEL` environment variable (default: `debug`,
+   * i.e. everything). Setting `SOROWILL_LOG_LEVEL=error` suppresses all
+   * entries except `error`-level ones.
+   *
+   * @since 0.1.2
+   */
+  readonly minLevel: LogLevel;
+
   constructor(enabled: boolean) {
     this.isActive = resolveEnabled(enabled);
+    this.minLevel = resolveLogLevel();
   }
 
   logOperationBuild(method: string, willId: string | undefined = undefined, details: Record<string, unknown> | undefined = undefined): void {
@@ -178,6 +251,8 @@ export class DebugLogger {
   }
 
   private log(log: DebugLog): void {
+    const severity: LogLevel = log.severity ?? LEVEL_SEVERITY[log.level];
+    if (SEVERITY_PRIORITY[severity] > SEVERITY_PRIORITY[this.minLevel]) return;
     // Structured, JSON-serializable output covering multiple log levels
     // (not just warn/error), so console.log is intentional here.
     // eslint-disable-next-line no-console
