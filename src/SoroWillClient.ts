@@ -2109,6 +2109,12 @@ export class SoroWillClient {
     args: Record<string, unknown>,
     options?: RequestOptions,
   ): Promise<{ txHash: string; createdAt: number; returnValue: ScVal | undefined; events?: Array<{ topics: string[]; data: unknown }> }> {
+    // #520: Validate that the connected wallet's network matches the client's
+    // configured network before building or signing any transaction. This is a
+    // defense-in-depth check; individual public methods also call
+    // assertWalletNetwork before invoking.
+    await this.assertWalletNetwork({ networkPassphrase: this.networkPassphrase });
+
     const willId = args.will_id === undefined ? undefined : String(args.will_id);
     const run = async (): Promise<{
       txHash: string;

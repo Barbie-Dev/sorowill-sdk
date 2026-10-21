@@ -81,7 +81,7 @@ export {
   isFreighterInstalled,
   signTransaction,
 } from './wallet';
-export type { WalletAdapter, WalletConnection } from './wallet';
+export type { WalletAdapter, WalletConnection, WalletSessionOptions } from './wallet';
 
 export { createAlbedoAdapter } from './adapters/albedo';
 export type { AlbedoAdapterOptions } from './adapters/albedo';

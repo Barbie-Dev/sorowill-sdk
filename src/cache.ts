@@ -47,7 +47,7 @@ function serializeCacheValue(value: unknown): string {
   });
 }
 
-function deserializeCacheValue<T>(value: string): T {
+export function deserializeCacheValue<T>(value: string): T {
   return JSON.parse(value, (_key, currentValue) => {
     if (
       currentValue &&
@@ -56,12 +56,16 @@ function deserializeCacheValue<T>(value: string): T {
       'value' in currentValue &&
       typeof currentValue.value === 'string'
     ) {
-      if (currentValue.__type === 'bigint') {
+      const type = currentValue.__type as string;
+      if (type === 'bigint') {
         return BigInt(currentValue.value);
       }
-      if (currentValue.__type === 'date') {
+      if (type === 'date') {
         return new Date(currentValue.value);
       }
+      console.warn(
+        `[SoroWill] Cache: unknown __type "${type}" encountered during deserialization; returning raw value.`,
+      );
     }
     return currentValue;
   }) as T;
@@ -144,13 +148,18 @@ export class ReadCache {
 
   constructor(options: ReadCacheOptions = {}) {
     const ttlMs = options.ttlMs ?? 60_000;
-    if (typeof ttlMs !== 'number' || !Number.isFinite(ttlMs) || ttlMs < 0) {
+    if (typeof ttlMs !== 'number' || !Number.isFinite(ttlMs)) {
       throw new Error(
-        `ReadCache: ttlMs must be a finite non-negative number, received ${String(ttlMs)}`,
+        `ReadCache: ttlMs must be a finite number, received ${String(ttlMs)}`,
       );
     }
+    if (ttlMs < 0) {
+      console.warn(
+        `[SoroWill] Cache: negative ttlMs ${ttlMs}ms is not allowed; treating as 0 (immediate expiration).`,
+      );
+    }
+    this.ttlMs = Math.max(0, ttlMs);
 
-    this.ttlMs = ttlMs;
     this.now = options.now ?? Date.now;
     this.persistence = options.persistence;
     this.maxEntries = options.maxEntries;

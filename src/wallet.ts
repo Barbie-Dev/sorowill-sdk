@@ -282,6 +282,16 @@ export async function ensureValidSession(
 }
 
 /**
+ * Options for configuring a wallet session.
+ *
+ * `sessionTtlMs` overrides the default session token TTL (15 minutes).
+ * When omitted, {@link DEFAULT_SESSION_TTL_MS} is used.
+ */
+export interface WalletSessionOptions {
+  sessionTtlMs?: number;
+}
+
+/**
  * Options accepted by {@link FreighterWalletAdapter}.
  *
  * `expectedNetworkPassphrase` is the network the SDK/client is configured for.
@@ -289,19 +299,23 @@ export async function ensureValidSession(
  * on `connect()`/`reconnect()` and rejects with a
  * {@link WalletNetworkMismatchError} on mismatch — instead of letting a
  * testnet wallet silently sign for a mainnet-configured client.
+ *
+ * `sessionTtlMs` overrides the default session token TTL (15 minutes).
  */
-export interface FreighterWalletAdapterOptions {
+export interface FreighterWalletAdapterOptions extends WalletSessionOptions {
   expectedNetworkPassphrase?: string;
 }
 
 export class FreighterWalletAdapter implements WalletAdapter {
   private readonly expectedNetworkPassphrase?: string;
+  private readonly sessionTtlMs: number;
   private session?: WalletSession;
 
   constructor(options: FreighterWalletAdapterOptions = {}) {
     if (options.expectedNetworkPassphrase !== undefined) {
       this.expectedNetworkPassphrase = options.expectedNetworkPassphrase;
     }
+    this.sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
   }
 
   /**
@@ -422,7 +436,7 @@ export class FreighterWalletAdapter implements WalletAdapter {
     const publicKey = await this.getPublicKey();
     this.session = {
       token: publicKey,
-      expiresAt: Date.now() + DEFAULT_SESSION_TTL_MS,
+      expiresAt: Date.now() + this.sessionTtlMs,
     };
     return this.session;
   }
