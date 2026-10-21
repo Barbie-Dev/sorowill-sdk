@@ -151,6 +151,13 @@ export class ReadCache {
   private readonly rollbackOnPersistenceFailure: boolean;
   private readonly readyPromise: Promise<void>;
   /**
+   * Will-ID to cache-key index. Maps each will ID to the set of cache keys
+   * whose entries reference that will ID, so reads and invalidations address
+   * the same entries and eviction can clean up associated references
+   * instead of leaking them.
+   */
+  private readonly willIdToKeys = new Map<string, Set<string>>();
+  /**
    * Keys written or deleted after construction but before hydration completes.
    * Hydration must not overwrite these with older persisted values.
    */
@@ -233,6 +240,15 @@ export class ReadCache {
     };
 
     this.touchedKeys.add(key);
+    // Index the key under each will ID so invalidation by will ID can find it.
+    for (const willId of entry.willIds) {
+      let keys = this.willIdToKeys.get(willId);
+      if (!keys) {
+        keys = new Set();
+        this.willIdToKeys.set(willId, keys);
+      }
+      keys.add(key);
+    }
     // Delete before set so an updated key moves to the most-recent position.
     this.entries.delete(key);
     this.entries.set(key, entry);
@@ -269,10 +285,9 @@ export class ReadCache {
     await this.readyPromise;
 
     const keysToDelete: string[] = [];
-    for (const [key, entry] of this.entries) {
-      if (entry.willIds.has(willId)) {
-        keysToDelete.push(key);
-      }
+    const keys = this.willIdToKeys.get(willId);
+    if (keys) {
+      keys.forEach((key) => keysToDelete.push(key));
     }
 
     await Promise.all(keysToDelete.map((key) => this.delete(key)));
@@ -342,12 +357,24 @@ export class ReadCache {
         continue;
       }
 
-      this.entries.set(persistedEntry.key, {
+      const entry: CacheEntry = {
         key: persistedEntry.key,
         value: deserializeCacheValue(persistedEntry.value),
         expiresAt: persistedEntry.expiresAt,
         willIds: new Set(persistedEntry.willIds),
-      });
+      };
+
+      // Rebuild the will-ID index from persisted entries.
+      for (const willId of entry.willIds) {
+        let keys = this.willIdToKeys.get(willId);
+        if (!keys) {
+          keys = new Set();
+          this.willIdToKeys.set(willId, keys);
+        }
+        keys.add(persistedEntry.key);
+      }
+
+      this.entries.set(persistedEntry.key, entry);
     }
 
     this.evictIfNeeded();

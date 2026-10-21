@@ -526,6 +526,24 @@ export class RpcEndpointPool {
   }
 
   /**
+   * Rotates the active RPC endpoint to the next one in the pool, e.g. after a
+   * failover or when the caller wants to proactively switch endpoints.
+   *
+   * @throws {Error} If the pool is empty (no endpoints configured).
+   * @returns The newly active RPC endpoint URL.
+   */
+  rotate(): string {
+    if (this.servers.length === 0) {
+      throw new Error(
+        'Cannot rotate RPC endpoint pool: no endpoints are configured. Add at least one RPC URL before rotating.',
+      );
+    }
+    this.lastFailoverAt = Date.now();
+    this.activeIndex = (this.activeIndex + 1) % this.servers.length;
+    return this.getActiveRpcUrl();
+  }
+
+  /**
    * Returns the RPC server bound to the pool's *current* active endpoint.
    *
    * Callers that cache a server reference (e.g. `getNetworkFeeStats` on a

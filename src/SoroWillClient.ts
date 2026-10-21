@@ -59,6 +59,7 @@ import {
   SoroWillInvalidAmountError,
   SoroWillRestoreRequiredError,
   TooManyGuardiansError,
+  TooManyIdsError,
   UnsupportedBatchSizeError,
   WalletNetworkMismatchError,
   WebSocketNotConfiguredError,
@@ -2707,11 +2708,16 @@ export class SoroWillClient {
    * footprint and resource fee estimates that Soroban simulation adds. Signing and submitting
    * this transaction directly will fail for any Soroban invocation that needs these estimates.
    *
-   * To use this for a custom signing flow:
-   * 1. Call this method to build the unsigned transaction XDR
-   * 2. Convert to XDR with `.toXDR()` and pass to your signing mechanism
-   * 3. After signing, call `prepareTransaction()` on the signed XDR to simulate and add fees
-   * 4. Submit the prepared transaction with `submitSignedTransaction()`
+   * Required preparation order (all four steps are required for state-changing calls):
+   * 1. Call `buildTransaction(method, args, sourcePublicKey)` to build the unsigned,
+   *    unprepared transaction XDR.
+   * 2. Call `prepareTransaction(unsignedTx)` on the unsigned XDR to simulate and add
+   *    footprint/resource-fee estimates.
+   * 3. Sign the prepared XDR with your external signing mechanism.
+   * 4. Call `submitSignedTransaction(signedPreparedXdr)` to submit and poll for finality.
+   *
+   * Skipping step 2 (preparation) will cause on-chain submission to fail, because Soroban
+   * transactions require simulated resource fees and footprint entries.
    *
    * Alternatively, use the higher-level state-changing methods (e.g. `createWill()`) which
    * handle building, simulating, signing, and submitting atomically.
@@ -2742,6 +2748,10 @@ export class SoroWillClient {
    * 2. `prepareTransaction()` on the unsigned XDR to simulate and add fees
    * 3. Sign the prepared XDR with your signing mechanism
    * 4. Call this method with the signed XDR to submit and poll
+   *
+   * The signed envelope passed here must already be prepared — submitting an unprepared
+   * Soroban transaction will fail on-chain because it lacks simulated resource fees and
+   * footprint entries.
    *
    * @param signedTxXdr - A signed, prepared transaction XDR string
    * @param options - Optional per-call timeout and abort signal

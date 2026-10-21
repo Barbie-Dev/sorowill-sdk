@@ -218,6 +218,7 @@ console.log(will.status, will.balance, will.beneficiaries);
 | `previewFee` | Simulates a state-changing method and returns its estimated Soroban resource fee | `method`, `params` | `Promise<{ resourceFee }>` |
 | `getNetworkFeeStats` | Passes through network-wide classic-fee/surge-pricing stats (no wallet required) | — | `Promise<rpc.Api.GetFeeStatsResponse>` |
 | `getWill` | Reads the full state of a will (no wallet required) | `willId` | `Promise<Will>` |
+| `getWills` | Reads multiple wills in a single batch RPC call (`get_wills`), with optional client-side pagination (max 50 IDs) | `willIds`, `PaginationOptions?` | `Promise<Will[] \| { wills, nextCursor }>` |
 | `getWillsByOwner` | Lists every will owned by an address, with optional client-side pagination | `owner`, `PaginationOptions?` | `Promise<Will[] \| { wills, nextCursor }>` |
 | `getWillsByBeneficiary` | Lists every will an address is named in, with optional client-side pagination | `beneficiary`, `PaginationOptions?` | `Promise<Will[] \| { wills, nextCursor }>` |
 | `guardianTrigger` | Casts a guardian vote; 2 of 3 forces an early release | `willId` | `Promise<{ txHash }>` |

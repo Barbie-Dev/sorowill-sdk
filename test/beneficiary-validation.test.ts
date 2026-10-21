@@ -404,7 +404,7 @@ describe('updateBeneficiaries — beneficiary validation fast-fail', () => {
 
     const client = makeClient();
     await expect(
-      client.updateBeneficiaries({ willId: '1', beneficiaries: VALID_BENEFICIARIES }),
+      client.updateBeneficiaries({ willId: '1', beneficiaries: VALID_BENEFICIARIES }, { skipExistenceCheck: true }),
     ).resolves.toMatchObject({ txHash: 'TXHASH2' });
   });
 

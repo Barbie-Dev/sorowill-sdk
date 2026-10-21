@@ -188,14 +188,17 @@ describe('beneficiary percentage -> contract basis points', () => {
       returnValue: undefined,
     });
 
-    await makeClient().updateBeneficiaries({
-      willId: '1',
-      beneficiaries: [
-        { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 33 },
-        { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 33 },
-        { address: 'GDPS7CHKGAWBCTWD4EWZ4MMFG56S4NCALGQOUBMX6DSCUIZFRQHHP3HB', percentage: 34 },
-      ],
-    });
+    await makeClient().updateBeneficiaries(
+      {
+        willId: '1',
+        beneficiaries: [
+          { address: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO', percentage: 33 },
+          { address: 'GAKUAEWGL2TSFIMEXD2VDVPX2BMJTAFFZEPJS4QQRJJF3X54P6S3QCZ6', percentage: 33 },
+          { address: 'GDPS7CHKGAWBCTWD4EWZ4MMFG56S4NCALGQOUBMX6DSCUIZFRQHHP3HB', percentage: 34 },
+        ],
+      },
+      { skipExistenceCheck: true },
+    );
 
     const bound = beneficiariesFor('update_beneficiaries');
     expect(bound).toEqual([
