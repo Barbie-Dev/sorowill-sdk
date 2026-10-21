@@ -45,9 +45,9 @@ function mapWill(raw: RawWill): Will {
 
 ## Suggested acceptance criteria
 
-- [ ] Return shallow copies of `beneficiaries` and `guardians` (and any other
+- [x] Return shallow copies of `beneficiaries` and `guardians` (and any other
       array fields) from `mapWill` rather than the raw references, e.g.
       `beneficiaries: [...raw.beneficiaries]`.
-- [ ] Add a unit test asserting that mutating a returned `Will`'s arrays does
+- [x] Add a unit test asserting that mutating a returned `Will`'s arrays does
       not affect the result of a subsequent call for the same will (in
       particular, a call served from `ReadCache`).

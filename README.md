@@ -565,6 +565,7 @@ Notes:
 |---|---|---|---|
 | `formatUSDC` | function | `utils` | Formats stroops as a human-readable decimal string, e.g. `"1,234.50"` |
 | `toStroops` | function | `utils` | Parses a decimal USDC string into base units as a `bigint` |
+| `deepFreezeObject` | function | `utils` | Recursively `Object.freeze`s a value and its nested objects so returned records cannot be mutated |
 | `getTimeUntilCheckin` | function | `utils` | Seconds until the next check-in deadline (negative if overdue) |
 | `isCheckinDue` | function | `utils` | Whether the check-in deadline has already passed |
 | `calculateShares` | function | `utils` | Splits a balance across beneficiaries, mirroring on-chain rounding |

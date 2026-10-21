@@ -134,6 +134,45 @@ export function isRpcTimeoutError(error: unknown): boolean {
 const DEFAULT_FAILOVER_COOLDOWN_MS = 60_000;
 
 /**
+ * Default number of consecutive failures before an endpoint is quarantined
+ * by the circuit breaker.
+ */
+export const DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3;
+
+/**
+ * Default cooldown (ms) before a quarantined endpoint is eligible to be
+ * retried again.
+ */
+export const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+
+/**
+ * Per-endpoint circuit-breaker state.
+ */
+interface EndpointCircuitState {
+  /** Number of consecutive failures recorded for this endpoint. */
+  failureCount: number;
+  /** Timestamp (ms) when the endpoint was quarantined, or null if not quarantined. */
+  quarantinedAt: number | null;
+}
+
+/**
+ * Options for configuring the circuit breaker behaviour of
+ * {@link RpcEndpointPool}.
+ */
+export interface CircuitBreakerOptions {
+  /**
+   * Maximum consecutive failures before an endpoint is quarantined.
+   * Defaults to {@link DEFAULT_CIRCUIT_BREAKER_THRESHOLD}.
+   */
+  threshold?: number;
+  /**
+   * Cooldown in milliseconds before a quarantined endpoint is eligible to
+   * be retried. Defaults to {@link DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS}.
+   */
+  cooldownMs?: number;
+}
+
+/**
  * Terminal transaction statuses reported by `getTransaction`. A transaction
  * in any of these states has already been resolved on-chain, so a fee-bump
  * must NOT be submitted for it (doing so risks a duplicate operation).
@@ -173,8 +212,11 @@ export class RpcEndpointPool {
   private readonly timeoutMs: number;
   private readonly timeoutMaxAttempts: number;
   private readonly timeoutRetryBaseDelayMs: number;
+  private readonly circuitBreakerThreshold: number;
+  private readonly circuitBreakerCooldownMs: number;
   private activeIndex = 0;
   private lastFailoverAt: number | null = null;
+  private readonly circuitStates: EndpointCircuitState[];
 
   /**
    * @param serverOverride - When provided (e.g. `SoroWillClientOptions.rpcServer`
@@ -190,6 +232,9 @@ export class RpcEndpointPool {
    * timeout errors. Defaults to {@link DEFAULT_RPC_TIMEOUT_MAX_ATTEMPTS}.
    * @param timeoutRetryBaseDelayMs - Base delay for exponential backoff on
    * timeout errors. Defaults to {@link DEFAULT_RPC_TIMEOUT_RETRY_BASE_DELAY_MS}.
+   * @param circuitBreaker - Optional circuit breaker configuration. When
+   * provided, endpoints that exceed the failure threshold are quarantined
+   * and skipped during failover until the cooldown elapses.
    */
   constructor(
     rpcUrls: readonly string[],
@@ -198,6 +243,7 @@ export class RpcEndpointPool {
     timeoutMs: number = DEFAULT_RPC_TIMEOUT_MS,
     timeoutMaxAttempts: number = DEFAULT_RPC_TIMEOUT_MAX_ATTEMPTS,
     timeoutRetryBaseDelayMs: number = DEFAULT_RPC_TIMEOUT_RETRY_BASE_DELAY_MS,
+    circuitBreaker?: CircuitBreakerOptions,
   ) {
     const normalizedRpcUrls = rpcUrls
       .map((rpcUrl) => rpcUrl.trim())
@@ -221,6 +267,12 @@ export class RpcEndpointPool {
     this.timeoutMs = timeoutMs;
     this.timeoutMaxAttempts = Math.max(1, timeoutMaxAttempts);
     this.timeoutRetryBaseDelayMs = timeoutRetryBaseDelayMs;
+    this.circuitBreakerThreshold = circuitBreaker?.threshold ?? DEFAULT_CIRCUIT_BREAKER_THRESHOLD;
+    this.circuitBreakerCooldownMs = circuitBreaker?.cooldownMs ?? DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS;
+    this.circuitStates = uniqueRpcUrls.map(() => ({
+      failureCount: 0,
+      quarantinedAt: null,
+    }));
     this.servers = serverOverride
       ? uniqueRpcUrls.map(() => serverOverride)
       : uniqueRpcUrls.map(
@@ -277,6 +329,54 @@ export class RpcEndpointPool {
     throw lastError ?? new Error('RPC timeout retries exhausted');
   }
 
+  /**
+   * Returns `true` when the endpoint at `index` is currently quarantined by
+   * the circuit breaker (i.e. it has exceeded the failure threshold and the
+   * cooldown has not yet elapsed).
+   */
+  private isEndpointQuarantined(index: number): boolean {
+    const state = this.circuitStates[index];
+    if (state?.quarantinedAt === null) {
+      return false;
+    }
+    if (state !== undefined && Date.now() - state.quarantinedAt >= this.circuitBreakerCooldownMs) {
+      // Cooldown elapsed — allow re-entry by clearing quarantine state.
+      state.quarantinedAt = null;
+      state.failureCount = 0;
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Records a failure for the endpoint at `index`. When the consecutive
+   * failure count reaches the circuit breaker threshold, the endpoint is
+   * quarantined.
+   */
+  private recordEndpointFailure(index: number): void {
+    const state = this.circuitStates[index];
+    if (state === undefined) {
+      return;
+    }
+    state.failureCount += 1;
+    if (state.failureCount >= this.circuitBreakerThreshold && state.quarantinedAt === null) {
+      state.quarantinedAt = Date.now();
+    }
+  }
+
+  /**
+   * Resets the circuit-breaker state for the endpoint at `index` after a
+   * successful call.
+   */
+  private resetEndpointFailure(index: number): void {
+    const state = this.circuitStates[index];
+    if (state === undefined) {
+      return;
+    }
+    state.failureCount = 0;
+    state.quarantinedAt = null;
+  }
+
   async withFailover<T>(operation: (server: SoroWillRpcServer, rpcUrl: string) => Promise<T>): Promise<T> {
     this.maybeRepromotePrimaryEndpoint();
     let lastError: unknown;
@@ -290,10 +390,24 @@ export class RpcEndpointPool {
         break;
       }
 
+      // Skip endpoints quarantined by the circuit breaker.
+      if (this.isEndpointQuarantined(index)) {
+        // Advance past the quarantined endpoint without consuming a real
+        // attempt, so the loop can try the next available endpoint.
+        if (this.activeIndex === index) {
+          this.activeIndex = (index + 1) % this.servers.length;
+        }
+        continue;
+      }
+
       try {
-        return await this.runWithTimeoutRetry(operation, server, rpcUrl);
+        const result = await this.runWithTimeoutRetry(operation, server, rpcUrl);
+        // Success — reset the circuit breaker for this endpoint.
+        this.resetEndpointFailure(index);
+        return result;
       } catch (error) {
         lastError = error;
+        this.recordEndpointFailure(index);
         if (!isRetryableRpcConnectionError(error) || attempt === this.servers.length - 1) {
           throw error;
         }

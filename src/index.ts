@@ -225,6 +225,7 @@ export {
   MAX_BENEFICIARIES,
   MAX_GUARDIANS,
   calculateShares,
+  deepFreezeObject,
   formatDeadline,
   formatTokenAmount,
   formatUSDC,

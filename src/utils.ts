@@ -422,3 +422,43 @@ export function formatTokenAmount(
   const bigIntValue = typeof stroops === 'bigint' ? stroops : BigInt(stroops);
   return formatUSDC(bigIntValue, decimals);
 }
+
+/**
+ * Recursively freezes `value` and all of its nested objects so that any
+ * subsequent mutation attempt throws (in strict mode) or silently fails
+ * (in sloppy mode).
+ *
+ * Use this to enforce immutability guarantees on SDK-returned objects so
+ * callers cannot accidentally mutate internal SDK state by modifying a
+ * returned `Will`, `Beneficiary`, or similar value object.
+ *
+ * Only plain objects, arrays, and `Date` instances are traversed. Other
+ * values (primitives, class instances, etc.) are left as-is.
+ *
+ * @example
+ * ```ts
+ * import { deepFreezeObject } from '@sorowill/sdk';
+ *
+ * const will = deepFreezeObject(await client.getWill('1'));
+ * will.balance = '999999'; // TypeScript error at runtime: cannot assign to read-only property
+ * ```
+ */
+export function deepFreezeObject<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  // Freeze plain objects and arrays recursively.
+  if (typeof value === 'object') {
+    Object.freeze(value);
+
+    for (const key of Object.keys(value)) {
+      const child = (value as Record<string, unknown>)[key];
+      if (child !== null && typeof child === 'object' && !Object.isFrozen(child)) {
+        deepFreezeObject(child);
+      }
+    }
+  }
+
+  return value;
+}

@@ -41,14 +41,14 @@ context.
 
 ## Suggested acceptance criteria
 
-- [ ] Add a test constructing a `SoroWillClient` with an obviously invalid
+- [x] Add a test constructing a `SoroWillClient` with an obviously invalid
       `contractId` (wrong length, bad checksum, wrong prefix) and
       document/assert the actual resulting behavior.
-- [ ] Since the current behavior (bare `Invalid contract ID: <value>` with no
+- [x] Since the current behavior (bare `Invalid contract ID: <value>` with no
       SoroWill context) is unhelpful, wrap construction in a try/catch that
       rethrows a clearer, SDK-specific error identifying `contractId` as the
       invalid option.
-- [ ] Blocked on / should land alongside the `SoroWillClient.ts` merge
+- [x] Blocked on / should land alongside the `SoroWillClient.ts` merge
       reconciliation in
       [`broken-merge-sorowillclient.md`](./broken-merge-sorowillclient.md),
       since both duplicated constructors need the same fix applied once

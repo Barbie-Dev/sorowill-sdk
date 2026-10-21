@@ -57,15 +57,15 @@ duplicated blocks reflects the intended, final state of the class.
 
 ## Suggested acceptance criteria
 
-- [ ] Reconcile `src/SoroWillClient.ts` into a single, internally consistent
+- [x] Reconcile `src/SoroWillClient.ts` into a single, internally consistent
       implementation — decide which of the two constructor/adapter/RPC
       strategies (simple retry + `wallet` adapter vs. `RpcEndpointPool` +
       `RequestQueue` + free-function wallet calls) is the intended
       direction, and remove the other.
-- [ ] Deduplicate `SoroWillClientOptions`, imports, and class fields.
-- [ ] Deduplicate the `@albedo-link/intent` entry in `package.json`.
-- [ ] Confirm `npm run typecheck` and `npm run build` succeed afterward.
-- [ ] Confirm `npm test` still passes against the reconciled client.
+- [x] Deduplicate `SoroWillClientOptions`, imports, and class fields.
+- [x] Deduplicate the `@albedo-link/intent` entry in `package.json`.
+- [x] Confirm `npm run typecheck` and `npm run build` succeed afterward.
+- [x] Confirm `npm test` still passes against the reconciled client.
 
 ## Why this blocks #88/#89/#90/#91
 

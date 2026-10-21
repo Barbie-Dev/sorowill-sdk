@@ -85,7 +85,16 @@ function makeRpcServer(simImpl?: () => Promise<unknown>, wasmImpl?: () => Promis
       if (simImpl) return (await simImpl()) as never;
       return { transactionData: 'AAAA', result: { retval: VOID_SCVAL } } as never;
     },
-    async getAccount(address: string) { return new Account(address, '1'); },
+    async getAccount(address: string) {
+      // Real fixes expect a real strkey; fixtures may use fake addresses like
+      // 'GBEN' which fail Account's strkey validation. Return a minimal stub
+      // for those so beneficiary-funding validation considers them funded.
+      try {
+        return new Account(address, '1');
+      } catch {
+        return { accountId: address, sequenceNumber: '1' } as never;
+      }
+    },
     async prepareTransaction(tx: unknown) { return tx as never; },
     async sendTransaction() { return { status: 'PENDING', hash: 'abc123' } as never; },
     async pollTransaction() {

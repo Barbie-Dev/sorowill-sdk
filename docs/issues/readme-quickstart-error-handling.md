@@ -27,11 +27,11 @@ common, expected occurrences in a wallet-based dApp flow.
 
 ## Suggested acceptance criteria
 
-- [ ] Wrap the wallet-connection step (`connectWallet()`) and the contract-call
+- [x] Wrap the wallet-connection step (`connectWallet()`) and the contract-call
       step (`client.createWill(...)`) in `try`/`catch` in the Quick Start
       example.
-- [ ] Add a brief comment at each `catch` on what kinds of errors to expect
+- [x] Add a brief comment at each `catch` on what kinds of errors to expect
       there (e.g. wallet not installed / connection rejected vs. simulation,
       signing, or submission failure).
-- [ ] Confirm the updated snippet is still otherwise runnable as documented
+- [x] Confirm the updated snippet is still otherwise runnable as documented
       (imports, option shapes, etc. unchanged).
