@@ -33,12 +33,21 @@ export interface AfterInvokeContext {
 
 /**
  * A function that runs before a contract call is submitted.
- * Return `false` to abort the invocation, or `void` to proceed.
+ *
+ * Return contract (validated at runtime by {@link HookManager}):
+ * - `false` — abort the invocation.
+ * - `true` or `undefined` (void) — proceed with the invocation.
+ *
+ * Any other return value (string, number, object, `null`, …) is rejected with
+ * a {@link HookExecutionError} so that accidental return values (e.g. the
+ * boolean from `Map.set()` or `array.push()`) cannot silently change — or
+ * appear to change — the control flow of an invocation.
  */
 export type BeforeInvokeHook = (ctx: BeforeInvokeContext) => boolean | void | Promise<boolean | void>;
 
 /**
  * A function that runs after a contract call completes (success or failure).
+ * The return value is ignored; hooks must not return anything meaningful.
  */
 export type AfterInvokeHook = (ctx: AfterInvokeContext) => void | Promise<void>;
 
@@ -115,10 +124,38 @@ export class HookManager {
     this.registry.afterInvoke.length = 0;
   }
 
+  /**
+   * @internal Guard for the documented return contract of hook callbacks.
+   *
+   * `beforeInvoke` hooks may only return `boolean` (control the invocation) or
+   * `undefined`/void (proceed). Anything else is a programming error — e.g.
+   * `hooks.onBeforeInvoke((ctx) => cache.set(ctx.method, true))` returns the
+   * `boolean` from `Map.set()` that the author never intended to expose — and
+   * is rejected here with a clear {@link HookExecutionError} instead of being
+   * silently ignored.
+   */
+  private static assertAllowedHookReturnValue(result: unknown, hookName: string): void {
+    if (result === undefined || typeof result === 'boolean') {
+      return;
+    }
+
+    const receivedType = result === null ? 'null' : typeof result;
+    throw new HookExecutionError(
+      hookName,
+      new TypeError(
+        `${hookName} hook returned a value of type "${receivedType}" — hooks must return ` +
+          `a boolean (false aborts the invocation) or void (proceeds).`,
+      ),
+    );
+  }
+
   /** @internal Run all beforeInvoke hooks. Returns `false` if any hook aborted.
    * If any hook throws, the error is wrapped in a `HookExecutionError` and
    * re-thrown immediately. The transaction is not built or submitted when a
    * hook throws — the client state is unchanged.
+   *
+   * A hook that returns anything other than a boolean or void is rejected with
+   * a `HookExecutionError` whose message names the offending return type.
    */
   async runBeforeInvoke(ctx: BeforeInvokeContext): Promise<boolean> {
     if (this.executing) {

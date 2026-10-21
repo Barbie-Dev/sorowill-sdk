@@ -5,6 +5,53 @@ export const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 export const DEFAULT_RPC_TIMEOUT_MAX_ATTEMPTS = 3;
 export const DEFAULT_RPC_TIMEOUT_RETRY_BASE_DELAY_MS = 1_000;
 
+/**
+ * Base delay applied to an RPC endpoint after it fails a request. The delay
+ * doubles for every consecutive failure (exponential backoff) and is capped at
+ * {@link DEFAULT_RPC_ENDPOINT_BACKOFF_MAX_MS}. While an endpoint is backing
+ * off it is deprioritized — the pool routes requests to other healthy
+ * endpoints instead of immediately retrying the failing one.
+ */
+export const DEFAULT_RPC_ENDPOINT_BACKOFF_BASE_MS = 1_000;
+
+/** Upper bound for the per-endpoint exponential backoff delay. */
+export const DEFAULT_RPC_ENDPOINT_BACKOFF_MAX_MS = 30_000;
+
+/**
+ * Validates an RPC endpoint URL at the moment it enters an
+ * {@link RpcEndpointPool} (construction or {@link RpcEndpointPool.add}), so
+ * that malformed URLs are rejected immediately instead of surfacing as
+ * confusing network errors on the first request.
+ *
+ * Accepted formats: absolute `http://` or `https://` URLs with a hostname,
+ * e.g. `https://soroban-testnet.stellar.org`.
+ */
+function assertValidRpcUrl(rpcUrl: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rpcUrl);
+  } catch (cause) {
+    throw new Error(
+      `Invalid RPC URL: "${rpcUrl}" — must be an absolute http(s) URL, ` +
+        `e.g. "https://soroban-testnet.stellar.org"`,
+      { cause },
+    );
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Invalid RPC URL: "${rpcUrl}" — only http(s) endpoints are supported ` +
+        `(got protocol "${parsed.protocol}")`,
+    );
+  }
+
+  if (parsed.hostname.length === 0) {
+    throw new Error(`Invalid RPC URL: "${rpcUrl}" — URL must include a hostname`);
+  }
+
+  return parsed;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -206,8 +253,9 @@ export async function isTransactionResolved(
 }
 
 export class RpcEndpointPool {
-  private readonly servers: SoroWillRpcServer[];
-  private readonly rpcUrls: string[];
+  private readonly servers: SoroWillRpcServer[] = [];
+  private readonly rpcUrls: string[] = [];
+  private readonly serverOverride: SoroWillRpcServer | undefined;
   private readonly failoverCooldownMs: number;
   private readonly timeoutMs: number;
   private readonly timeoutMaxAttempts: number;
@@ -253,16 +301,16 @@ export class RpcEndpointPool {
       throw new Error('At least one RPC URL must be configured');
     }
 
+    // Reject malformed or non-http(s) URLs immediately rather than letting
+    // them surface later as confusing network errors on the first request.
     for (const rpcUrl of normalizedRpcUrls) {
-      const parsed = new URL(rpcUrl);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        throw new Error(`Invalid RPC URL: ${rpcUrl}`);
-      }
+      assertValidRpcUrl(rpcUrl);
     }
 
     const uniqueRpcUrls = Array.from(new Set(normalizedRpcUrls));
 
-    this.rpcUrls = uniqueRpcUrls;
+    this.rpcUrls.push(...uniqueRpcUrls);
+    this.serverOverride = serverOverride;
     this.failoverCooldownMs = failoverCooldownMs;
     this.timeoutMs = timeoutMs;
     this.timeoutMaxAttempts = Math.max(1, timeoutMaxAttempts);
@@ -298,6 +346,51 @@ export class RpcEndpointPool {
       this.activeIndex = 0;
       this.lastFailoverAt = null;
     }
+  }
+
+  /** Whether an endpoint is still inside its backoff window. */
+  private isEndpointUnderBackoff(index: number): boolean {
+    return Date.now() < (this.backoffUntil[index] ?? 0);
+  }
+
+  /**
+   * Records a retryable failure for an endpoint and schedules its
+   * exponential backoff: `base * 2^(consecutiveFailures - 1)`, capped at
+   * `endpointBackoffMaxMs`.
+   */
+  private recordEndpointFailure(index: number): void {
+    const failures = (this.consecutiveFailures[index] ?? 0) + 1;
+    this.consecutiveFailures[index] = failures;
+    const exponentialDelay = this.endpointBackoffBaseMs * 2 ** (failures - 1);
+    this.backoffUntil[index] = Date.now() + Math.min(exponentialDelay, this.endpointBackoffMaxMs);
+  }
+
+  /** Clears the backoff state of an endpoint after a successful request. */
+  private recordEndpointSuccess(index: number): void {
+    this.consecutiveFailures[index] = 0;
+    this.backoffUntil[index] = 0;
+  }
+
+  /**
+   * Picks the endpoint a request should be routed to: the active endpoint if
+   * it is not backing off, otherwise the next endpoint (in rotation order)
+   * that is not backing off. If every endpoint is backing off, the active
+   * endpoint is used anyway — retrying the least-bad option beats failing
+   * outright, and the request would otherwise never be able to recover.
+   */
+  private selectEndpointIndex(): number {
+    if (!this.isEndpointUnderBackoff(this.activeIndex)) {
+      return this.activeIndex;
+    }
+
+    for (let offset = 1; offset < this.servers.length; offset += 1) {
+      const index = (this.activeIndex + offset) % this.servers.length;
+      if (!this.isEndpointUnderBackoff(index)) {
+        return index;
+      }
+    }
+
+    return this.activeIndex;
   }
 
   /**
@@ -382,7 +475,9 @@ export class RpcEndpointPool {
     let lastError: unknown;
 
     for (let attempt = 0; attempt < this.servers.length; attempt += 1) {
-      const index = this.activeIndex;
+      // Route around endpoints that are still backing off from a previous
+      // failure instead of immediately retrying them.
+      const index = this.selectEndpointIndex();
       const rpcUrl = this.rpcUrls[index];
       const server = this.servers[index];
 

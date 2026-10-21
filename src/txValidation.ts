@@ -1,3 +1,66 @@
+/**
+ * Transaction-match validation for prepared Soroban transactions.
+ *
+ * ## What this module validates
+ *
+ * {@link assertPreparedTransactionMatchesIntendedOperation} verifies that a
+ * *prepared* transaction (the version produced by
+ * `rpc.Server.prepareTransaction()` / fee-bumping, which may have been
+ * rewritten by the RPC node) still performs exactly the operations the caller
+ * originally intended. It is the guard against a hostile or buggy RPC node
+ * silently swapping, reordering, or mutating operations between simulation
+ * and submission.
+ *
+ * ## Supported operations
+ *
+ * Every Stellar operation type is covered, in one of two comparison modes:
+ *
+ * 1. **Soroban contract invocations**
+ *    (`INVOKE_HOST_FUNCTION` / `HOST_FUNCTION_TYPE_INVOKE_CONTRACT`) are
+ *    compared field-by-field:
+ *    - the host-function discriminant must match,
+ *    - the invoked contract address must match,
+ *    - the function name must match,
+ *    - every `ScVal` argument must match pairwise (compared as base64 XDR).
+ *
+ * 2. **All other operation types** (e.g. `PAYMENT`, `CREATE_ACCOUNT`,
+ *    `CHANGE_TRUST`, `MANAGE_SELL_OFFER`, `BEGIN_SPONSORING_RESERVES`) are
+ *    compared as whole operations: the base64 XDR of the intended and
+ *    prepared operations must be byte-identical.
+ *
+ * In both modes the operation *count* of the two transaction envelopes must
+ * also match, and the check is applied index-by-index so reordering is
+ * detected. Fee-bump envelopes are supported: operations are read from the
+ * inner (v1) transaction.
+ *
+ * When a `simulationResponse` is supplied, its `status` is checked first —
+ * a non-`"SUCCESS"` simulation throws {@link SimulationResultError} before any
+ * structural comparison happens.
+ *
+ * ## Example
+ *
+ * @example
+ * ```ts
+ * import { Server, TransactionBuilder } from '@stellar/stellar-sdk';
+ * import { assertPreparedTransactionMatchesIntendedOperation } from '@sorowill/sdk';
+ *
+ * const server = new Server(rpcUrl, { allowHttp: true });
+ * const intended = TransactionBuilder.fromXDR(intendedXdr, networkPassphrase);
+ *
+ * // prepareTransaction() may rewrite fees, resource limits, etc.
+ * const prepared = await server.prepareTransaction(intended);
+ * const simulation = await server.simulateTransaction(prepared);
+ *
+ * assertPreparedTransactionMatchesIntendedOperation({
+ *   context: 'create_will',
+ *   networkPassphrase,
+ *   intendedTransactionXdr: intended.toXDR(),
+ *   preparedTransactionXdr: prepared.toXDR(),
+ *   simulationResponse: simulation,
+ * });
+ * // Safe to sign and submit `prepared`.
+ * ```
+ */
 import { TransactionBuilder, xdr } from '@stellar/stellar-sdk';
 
 export interface TransactionMatchOptions {
@@ -172,6 +235,38 @@ function readOperationsFromEnvelope(
   throw new Error('Unable to decode transaction operations from XDR envelope');
 }
 
+/**
+ * Asserts that a prepared transaction still performs exactly the operations
+ * the caller intended to submit.
+ *
+ * See the module-level documentation above for the full description of what
+ * is compared. In summary, the following checks are performed in order:
+ *
+ * 1. If `options.simulationResponse` is provided, its `status` must be
+ *    `"SUCCESS"` (otherwise {@link SimulationResultError} is thrown).
+ * 2. Both XDR envelopes are decoded and their operation lists compared —
+ *    operation counts must be equal.
+ * 3. Each operation pair (compared index-by-index) must match:
+ *    - Soroban `INVOKE_HOST_FUNCTION` contract invocations: host-function
+ *      type, contract address, function name, and every `ScVal` argument are
+ *      compared field-by-field (arguments as base64 XDR).
+ *    - All other operation types (e.g. `PAYMENT`, `CREATE_ACCOUNT`,
+ *      `CHANGE_TRUST`, `MANAGE_SELL_OFFER`): the whole operation must be
+ *      byte-identical (base64 XDR equality).
+ *
+ * Fee-bump envelopes are supported — operations are read from the inner
+ * transaction. Throws a plain `Error` describing the mismatch otherwise.
+ *
+ * @example
+ * ```ts
+ * assertPreparedTransactionMatchesIntendedOperation({
+ *   context: 'create_will',
+ *   networkPassphrase: networks.TESTNET.passphrase,
+ *   intendedTransactionXdr: intendedTx.toXDR(),
+ *   preparedTransactionXdr: preparedTx.toXDR(),
+ * });
+ * ```
+ */
 export function assertPreparedTransactionMatchesIntendedOperation(
   options: TransactionMatchOptions,
 ): void {
