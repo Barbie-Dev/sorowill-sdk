@@ -1029,7 +1029,20 @@ export class SoroWillClient {
     return { willId, txHash };
   }
 
-  /** Resets the check-in countdown for `willId`. */
+  /**
+   * Resets the check-in countdown for `willId`.
+   *
+   * Before submitting, the will's existence is validated via `getWill()`
+   * unless `options.skipExistenceCheck` is `true`. If the will does not
+   * exist, a {@link WillNotFoundError} is thrown before any transaction is
+   * built, avoiding wasted gas and fees.
+   *
+   * @returns The transaction hash and the next check-in deadline.
+   * @throws {SoroWillError} If the transaction simulation/submission fails.
+   * @throws {RequestTimeoutError} If the RPC request exceeds its configured timeout.
+   * @throws {WillNotFoundError} If the will does not exist and `skipExistenceCheck` is not set.
+   * @throws {Error} If the wallet is not connected or fails to sign.
+   */
   async checkIn(
     willId: string,
     options?: RequestOptions,
@@ -1040,7 +1053,12 @@ export class SoroWillClient {
     // checkin_period_days is a stored will property not returned by the
     // contract's check_in function, so a separate getWill() read is
     // unavoidable in order to compute the nextDeadline return value.
-    const will = await this.getWill(willId, options);
+    // This read also validates will existence, throwing WillNotFoundError
+    // if the will is not found — before any gas is spent.
+    let will: Awaited<ReturnType<typeof this.getWill>> | null = null;
+    if (!options?.skipExistenceCheck) {
+      will = await this.getWill(willId, options);
+    }
     const { txHash, createdAt } = await this.invoke(
       'check_in',
       { will_id: parseWillId(willId), owner },
@@ -1048,7 +1066,9 @@ export class SoroWillClient {
     );
     return {
       txHash,
-      nextDeadline: new Date((createdAt + will.checkinPeriodDays * 86_400) * 1000),
+      nextDeadline: will
+        ? new Date((createdAt + will.checkinPeriodDays * 86_400) * 1000)
+        : new Date(createdAt * 1000),
     };
   }
 
@@ -1192,7 +1212,20 @@ export class SoroWillClient {
     return { txHash, refundAmount: will.balance };
   }
 
-  /** Replaces the beneficiary list for a will before it has been triggered. */
+  /**
+   * Replaces the beneficiary list for a will before it has been triggered.
+   *
+   * The will's existence is validated via `getWill()` before submission. If
+   * the will does not exist, a {@link WillNotFoundError} is thrown before any
+   * transaction is built, avoiding wasted gas and fees.
+   *
+   * @returns The transaction hash.
+   * @throws {BeneficiaryValidationError} If the beneficiary list fails client-side validation.
+   * @throws {SoroWillError} If the transaction simulation/submission fails.
+   * @throws {RequestTimeoutError} If the RPC request exceeds its configured timeout.
+   * @throws {WillNotFoundError} If the will does not exist.
+   * @throws {Error} If the wallet is not connected or fails to sign.
+   */
   async updateBeneficiaries(
     params: UpdateBeneficiariesParams,
     options?: RequestOptions,
@@ -1206,6 +1239,9 @@ export class SoroWillClient {
         'Invalid beneficiaries: list must be 1–10 entries, every percentage must be a positive integer, and percentages must sum to exactly 100.',
       );
     }
+    // Validate will existence before submitting, to avoid wasting gas on a
+    // non-existent will.
+    await this.getWill(params.willId, options);
     await this.assertWalletNetwork({ networkPassphrase: this.networkPassphrase });
     const owner = await this.getWalletPublicKey();
     const { txHash } = await this.invoke(

@@ -121,7 +121,7 @@ vi.mock('@stellar/stellar-sdk', async () => {
 });
 
 import { SoroWillClient } from '../src/SoroWillClient';
-import { BeneficiaryValidationError, SoroWillError } from '../src/errors';
+import { BeneficiaryValidationError, SoroWillError, WillNotFoundError } from '../src/errors';
 import { FreighterWalletAdapter } from '../src/wallet';
 
 const VALID_BENEFICIARIES = [
@@ -282,6 +282,7 @@ describe('updateBeneficiaries — beneficiary validation fast-fail', () => {
     mockState.sendTransaction.mockReset();
     mockState.pollTransaction.mockReset();
     mockState.prepareTransaction.mockClear();
+    mockState.simulateTransaction.mockReset();
     mockState.getContractWasmByContractId.mockClear();
     freighterApiMock.getAddress.mockClear();
   });
@@ -354,6 +355,24 @@ describe('updateBeneficiaries — beneficiary validation fast-fail', () => {
 
   it('does NOT throw for a valid two-beneficiary list summing to 100', async () => {
     freighterApiMock.signTransaction.mockResolvedValue({ envelope_xdr: 'SIGNED_XDR2', error: undefined });
+    mockState.simulateTransaction.mockResolvedValue({
+      result: {
+        retval: {
+          id: 1n,
+          owner: 'GC6HGXZGSXRY2NLLRYGVHCCDNULAQ6N2QX6Q47UUW42FTH2HBAXTM2WO',
+          token: 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526',
+          balance: 1000000n,
+          beneficiaries: [],
+          checkin_period_days: 90n,
+          grace_period_days: 7n,
+          last_checkin: 1_700_000_000n,
+          status: 'Active',
+          guardians: [],
+          guardian_votes: 0,
+        },
+      },
+      error: undefined,
+    });
     mockState.sendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'TXHASH2' });
     mockState.pollTransaction.mockResolvedValue({
       status: 'SUCCESS',
@@ -365,5 +384,18 @@ describe('updateBeneficiaries — beneficiary validation fast-fail', () => {
     await expect(
       client.updateBeneficiaries({ willId: '1', beneficiaries: VALID_BENEFICIARIES }),
     ).resolves.toMatchObject({ txHash: 'TXHASH2' });
+  });
+
+  it('throws WillNotFoundError when the will does not exist', async () => {
+    freighterApiMock.signTransaction.mockResolvedValue({ envelope_xdr: 'SIGNED_XDR3', error: undefined });
+    // getWill's simulation returns a WillNotFound contract error (code 1)
+    mockState.simulateTransaction.mockResolvedValue({ error: 'Error(Contract, #1)' });
+
+    const client = makeClient();
+    await expect(
+      client.updateBeneficiaries({ willId: '999', beneficiaries: VALID_BENEFICIARIES }),
+    ).rejects.toBeInstanceOf(WillNotFoundError);
+    // No transaction should be sent for a non-existent will
+    expect(mockState.sendTransaction).not.toHaveBeenCalled();
   });
 });

@@ -102,9 +102,40 @@ export enum WillErrorCode {
  *
  * @since 0.1.0
  */
+/**
+ * A single beneficiary of a will, with their Stellar address and percentage
+ * share of the will's balance.
+ *
+ * ## Validation constraints
+ * - `address` must be a valid Stellar public key (StrKey encoded, `G` prefix).
+ *   Use {@link StrKey.isValidEd25519PublicKey} from `@stellar/stellar-sdk` to
+ *   validate client-side before submission.
+ * - `percentage` must be an integer in the range 0–100 (inclusive).
+ * - Across all beneficiaries in a single will, percentages must sum to exactly
+ *   100.
+ *
+ * These constraints are enforced client-side by {@link validateBeneficiaries}
+ * (called by {@link SoroWillClient.createWill} and
+ * {@link SoroWillClient.updateBeneficiaries}) and by the on-chain contract
+ * (error codes {@link WillErrorCode.InvalidPercentage} and
+ * {@link WillErrorCode.InvalidPercentages}).
+ *
+ * @example
+ * ```ts
+ * const beneficiary: Beneficiary = {
+ *   address: 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG',
+ *   percentage: 60,
+ * };
+ * ```
+ *
+ * @since 0.1.0
+ */
 export interface Beneficiary {
   /**
-   * Stellar address of the beneficiary.
+   * Stellar address of the beneficiary. Must be a valid Ed25519 public key
+   * encoded as a StrKey string (e.g. `GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG`).
+   *
+   * @example 'GA3JE5IXBSOR6DCLZSGN7JIWQWO45RCS7PUFKKVXWSTE4Y75ISIDMHJG'
    * @since 0.1.0
    */
   address: string;
@@ -113,12 +144,15 @@ export interface Beneficiary {
    * whole percentage on the 0–100 scale. All beneficiary percentages in a
    * will must sum to exactly 100.
    *
+   * **Constraint**: must be an integer between 0 and 100 (inclusive).
+   *
    * **Breaking change in 0.1.1:** prior to 0.1.1 this field was named
    * `basisPoints` and stored the raw on-chain value (0–10 000). It was
    * renamed to `percentage` and re-scaled to 0–100 to match the SDK's
    * public semantics. If you stored beneficiary objects from SDK < 0.1.1,
    * divide each saved value by 100 to convert.
    *
+   * @example 60
    * @since 0.1.1
    */
   percentage: number;
@@ -329,6 +363,16 @@ export interface RequestOptions {
   retries?: number;
   timeout?: number;
   timeoutMs?: number;
+  /**
+   * When `true`, skips the client-side will-existence pre-check (e.g.
+   * `getWill()`) before submitting a state-changing transaction. Use only when
+   * the caller has already confirmed the will exists, to avoid an extra RPC
+   * round-trip. Methods that require the will's on-chain state for their
+   * return value (e.g. `checkIn`'s `nextDeadline`) may return a best-effort
+   * value when this is set.
+   * @default false
+   */
+  skipExistenceCheck?: boolean;
 }
 
 export interface SoroWillEvent {

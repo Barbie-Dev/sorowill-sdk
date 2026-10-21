@@ -329,4 +329,63 @@ describe('FreighterWalletAdapter', () => {
       expect(result.network).toBe('TESTNET');
     });
   });
+
+  describe('MIN_FREIGHTER_VERSION', () => {
+    it('exports a minimum Freighter version constant', async () => {
+      const { MIN_FREIGHTER_VERSION } = await import('../src/wallet');
+      expect(MIN_FREIGHTER_VERSION).toBe('6.0.0');
+    });
+  });
+
+  describe('Freighter version check', () => {
+    beforeEach(() => {
+      freighterApiMock.isConnected.mockReset();
+      freighterApiMock.requestAccess.mockReset();
+      freighterApiMock.getNetworkDetails.mockReset();
+      freighterApiMock.getAddress.mockReset();
+      // Default: freighter-api exposes a compatible version
+      (freighterApiMock as unknown as { version?: string }).version = '6.1.0';
+    });
+
+    it('connect succeeds when freighter-api exposes a version at or above minimum', async () => {
+      freighterApiMock.requestAccess.mockResolvedValue({
+        address: 'GTESTACCOUNT12345678901234567890123456789012',
+        error: undefined,
+      });
+      freighterApiMock.getNetworkDetails.mockResolvedValue({
+        network: 'TESTNET',
+        networkPassphrase: 'Test SDF Network ; September 2015',
+        error: undefined,
+      });
+
+      const adapter = new FreighterWalletAdapter();
+      await expect(adapter.connect()).resolves.toBeDefined();
+    });
+
+    it('connect throws when freighter-api exposes a version below minimum', async () => {
+      const { FreighterInstallCheckError } = await import('../src/errors');
+
+      (freighterApiMock as unknown as { version?: string }).version = '5.0.0';
+
+      const adapter = new FreighterWalletAdapter();
+      await expect(adapter.connect()).rejects.toBeInstanceOf(FreighterInstallCheckError);
+    });
+
+    it('connect proceeds when freighter-api does not expose a version', async () => {
+      delete (freighterApiMock as unknown as { version?: string }).version;
+
+      freighterApiMock.requestAccess.mockResolvedValue({
+        address: 'GTESTACCOUNT12345678901234567890123456789012',
+        error: undefined,
+      });
+      freighterApiMock.getNetworkDetails.mockResolvedValue({
+        network: 'TESTNET',
+        networkPassphrase: 'Test SDF Network ; September 2015',
+        error: undefined,
+      });
+
+      const adapter = new FreighterWalletAdapter();
+      await expect(adapter.connect()).resolves.toBeDefined();
+    });
+  });
 });

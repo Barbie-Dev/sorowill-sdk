@@ -39,6 +39,34 @@ function loadFreighterApi(): Promise<typeof FreighterApi> {
 const DEFAULT_SIGN_TIMEOUT_MS = 120_000;
 
 /**
+ * Minimum Freighter extension version required by this SDK.
+ *
+ * Freighter versions below this may not support the APIs used by
+ * {@link FreighterWalletAdapter} (e.g. `requestAccess`, `getNetworkDetails`,
+ * `getAddress`, `signTransaction`). Consumers should ensure users update
+ * Freighter before attempting to connect.
+ */
+export const MIN_FREIGHTER_VERSION = '6.0.0';
+
+/**
+ * Compares two semantic version strings (e.g. `6.0.0`, `6.1.2`).
+ * Returns `true` if `a` is greater than or equal to `b`.
+ */
+function gteVersion(a: string, b: string): boolean {
+  const parse = (v: string): number[] =>
+    v.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const va = pa[i] ?? 0;
+    const vb = pb[i] ?? 0;
+    if (va > vb) return true;
+    if (va < vb) return false;
+  }
+  return true;
+}
+
+/**
  * The `code` Freighter's `isConnected()` API returns for the ordinary
  * "extension not present/injected" case (e.g. running outside a browser, or
  * no Freighter extension installed) — as opposed to an unexpected internal
@@ -306,6 +334,19 @@ export interface FreighterWalletAdapterOptions extends WalletSessionOptions {
   expectedNetworkPassphrase?: string;
 }
 
+/**
+ * Browser-extension wallet adapter backed by the Freighter browser extension.
+ *
+ * ## Minimum Freighter version
+ *
+ * This adapter requires Freighter {@link MIN_FREIGHTER_VERSION} or later.
+ * Older versions may not support the `@stellar/freighter-api` methods used
+ * here (`requestAccess`, `getNetworkDetails`, `getAddress`, `signTransaction`).
+ * The version is checked on {@link connect} and an error is thrown if the
+ * installed Freighter is below the minimum.
+ *
+ * @since 0.1.0
+ */
 export class FreighterWalletAdapter implements WalletAdapter {
   private readonly expectedNetworkPassphrase?: string;
   private readonly sessionTtlMs: number;
@@ -333,6 +374,40 @@ export class FreighterWalletAdapter implements WalletAdapter {
   }
 
   /**
+   * Asserts that the installed Freighter extension meets the minimum version
+   * requirement ({@link MIN_FREIGHTER_VERSION}).
+   *
+   * Attempts to read the Freighter API version from the loaded
+   * `@stellar/freighter-api` module. If the version cannot be determined or
+   * is below the minimum, throws a {@link FreighterInstallCheckError}.
+   */
+  private async assertFreighterVersion(): Promise<void> {
+    try {
+      const freighterApi = await loadFreighterApi();
+      const version =
+        (freighterApi as unknown as { version?: string }).version ??
+        (freighterApi as unknown as { default?: { version?: string } }).default
+          ?.version;
+      if (version && !gteVersion(version, MIN_FREIGHTER_VERSION)) {
+        throw new FreighterInstallCheckError(
+          -1,
+          `Freighter version ${version} is below the minimum required version ${MIN_FREIGHTER_VERSION}. Please update Freighter.`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof FreighterInstallCheckError) {
+        throw err;
+      }
+      // If we cannot determine the version, warn but do not block — the
+      // extension may still work even if its version is not exposed.
+      console.warn(
+        `[SoroWill] Could not determine Freighter version; proceeding without version check. ` +
+          `Ensure Freighter is at least v${MIN_FREIGHTER_VERSION}.`,
+      );
+    }
+  }
+
+  /**
    * Reports whether the Freighter extension is present and reachable.
    *
    * Resolves `false` only for the ordinary "extension not installed/injected"
@@ -354,6 +429,7 @@ export class FreighterWalletAdapter implements WalletAdapter {
   }
 
   async connect(): Promise<WalletConnection> {
+    await this.assertFreighterVersion();
     const freighterApi = await loadFreighterApi();
     const access = await freighterApi.requestAccess();
     if (access.error) {

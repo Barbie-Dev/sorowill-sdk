@@ -20,6 +20,7 @@ import { Account, xdr } from '@stellar/stellar-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { SoroWillClient, type SoroWillRpcServer } from '../src/SoroWillClient';
+import { WillNotFoundError } from '../src/errors';
 import { WillStatus } from '../src/types';
 
 const TEST_ACCOUNT = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
@@ -180,5 +181,63 @@ describe('checkIn nextDeadline consistency with getWill', () => {
     // The deadline must be exactly CHECKIN_LEDGER_TIME + 90 days (in ms).
     const expectedMs = (CHECKIN_LEDGER_TIME + CHECKIN_PERIOD_DAYS * 86_400) * 1000;
     expect(nextDeadline.getTime()).toBe(expectedMs);
+  });
+
+  it('throws WillNotFoundError when the will does not exist', async () => {
+    // createRpcServer returns a successful simulation; override to return a
+    // WillNotFound contract error (code 1) for the getWill read.
+    const failingRpcServer: SoroWillRpcServer = {
+      ...createRpcServer(),
+      async simulateTransaction() {
+        return { error: 'Error(Contract, #1)' } as never;
+      },
+    };
+
+    const wallet = {
+      async isConnected() { return true; },
+      async connect() { return { publicKey: TEST_ACCOUNT, network: 'testnet', networkPassphrase: 'Test SDF Network ; September 2015' }; },
+      async reconnect() { return { publicKey: TEST_ACCOUNT, network: 'testnet', networkPassphrase: 'Test SDF Network ; September 2015' }; },
+      async disconnect() {},
+      async getPublicKey() { return TEST_ACCOUNT; },
+      async signTransaction(xdrStr: string) { return xdrStr; },
+    };
+
+    const client = new SoroWillClient({
+      network: 'testnet',
+      contractId: 'CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR',
+      wallet,
+      readCache: false,
+      spec: createSpec([]),
+      rpcServer: failingRpcServer,
+    });
+
+    await expect(client.checkIn('999')).rejects.toBeInstanceOf(WillNotFoundError);
+  });
+
+  it('skips the existence pre-check when skipExistenceCheck is true', async () => {
+    const spec = createSpec([]); // getWill is never called
+
+    const wallet = {
+      async isConnected() { return true; },
+      async connect() { return { publicKey: TEST_ACCOUNT, network: 'testnet', networkPassphrase: 'Test SDF Network ; September 2015' }; },
+      async reconnect() { return { publicKey: TEST_ACCOUNT, network: 'testnet', networkPassphrase: 'Test SDF Network ; September 2015' }; },
+      async disconnect() {},
+      async getPublicKey() { return TEST_ACCOUNT; },
+      async signTransaction(xdrStr: string) { return xdrStr; },
+    };
+
+    const client = new SoroWillClient({
+      network: 'testnet',
+      contractId: 'CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR',
+      wallet,
+      readCache: false,
+      spec,
+      rpcServer: createRpcServer(),
+    });
+
+    // With skipExistenceCheck, getWill is not called, so even a non-existent
+    // will passes through to the invoke step.
+    const { txHash } = await client.checkIn('999', { skipExistenceCheck: true });
+    expect(txHash).toBe('checkin_tx_hash');
   });
 });
